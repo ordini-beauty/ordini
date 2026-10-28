@@ -265,3 +265,14 @@ details.storia summary { padding: 10px 0 4px; font-size: 15px; font-weight: 600;
 .tag-scorta { display: inline-block; font-size: 12px; font-weight: 700; color: var(--orange); background: var(--orange-soft); border-radius: 999px; padding: 2px 8px; }
 .big-tag { font-size: 14px; padding: 6px 4px 6px 12px; display: flex; justify-content: space-between; align-items: center; }
 .add-box .two input#art-qta { text-align: center; }
+
+.grid-compleanno { display: grid; grid-template-columns: 1fr 1.6fr; gap: 8px; }
+.compleanno { background: linear-gradient(135deg, var(--card) 60%, var(--pink-soft)); }
+
+.campagna-btn { margin-bottom: 14px; }
+.campagna-btn .row { align-items: center; }
+.progress { height: 12px; background: var(--line); border-radius: 6px; overflow: hidden; margin-top: 8px; }
+.progress span { display: block; height: 100%; background: var(--green); border-radius: 6px; transition: width .3s; }
+.item.invio { gap: 12px; }
+.item.invio .avatar { width: 38px; height: 38px; font-size: 15px; }
+.item.invio.ok { opacity: .7; }

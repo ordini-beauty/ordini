@@ -4,8 +4,8 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, SCORTA, STORICO,
-  isSpeciale, statoScorta, guadagnoPerMese, inventarioScorta, completaCostiScorta, costoDaConfezione, omaggiOrdine } from "./calc.js?v=12";
-import { convertiFoglio, parseOmaggi } from "./importa.js?v=12";
+  isSpeciale, statoScorta, guadagnoPerMese, inventarioScorta, completaCostiScorta, costoDaConfezione, omaggiOrdine } from "./calc.js?v=14";
+import { convertiFoglio, parseOmaggi } from "./importa.js?v=14";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -56,6 +56,17 @@ const plurale = (n, uno, tanti) => `${n} ${n === 1 ? uno : tanti}`;
 const nomeRiga = (r) => r.clienteId === IO ? "Per me" : r.clienteId === SCORTA ? "Da rivendere" : r.clienteId === STORICO ? (r.clientiStorico || "Più clienti")
   : (clienti.find(c => c.id === r.clienteId)?.nome || "Cliente eliminata");
 const primoNome = (c) => String(c?.nome || "").split(" ")[0];
+const arrivato = (o) => o.arrivato !== false;   // ordini vecchi (senza il campo) = arrivati
+const MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+const compleannoTesto = (mmdd) => { if (!mmdd) return ""; const [m, d] = mmdd.split("-").map(Number); return `${d} ${MESI[m - 1]}`; };
+// prossimo compleanno: { data: "AAAA-MM-GG", giorni: 0 = oggi }
+function prossimoCompleanno(mmdd) {
+  if (!/^\d{2}-\d{2}$/.test(mmdd || "")) return null;
+  const oggiIso = oggi(), anno = Number(oggiIso.slice(0, 4));
+  let data = `${anno}-${mmdd}`;
+  if (data < oggiIso) data = `${anno + 1}-${mmdd}`;
+  return { data, giorni: Math.round((Date.parse(data + "T00:00Z") - Date.parse(oggiIso + "T00:00Z")) / 86400000) };
+}
 
 // Colore fisso per ogni persona (avatar)
 const PALETTE = ["c-pink", "c-orange", "c-purple", "c-blue", "c-green", "c-gold"];
@@ -127,6 +138,7 @@ function vai(v) {
 
 function render() {
   if (!uid) return;
+  programmaNotificheTraPoco();
   const v = VISTE[vista];
   $("#view-title").textContent = v.titolo;
   $("#hello").textContent = vista === "home"
@@ -157,19 +169,21 @@ function apriWhatsApp(cliente, testo) {
 const elencoProdotti = (righe) => righe.map(r => r.prodotti).filter(Boolean).join(", ");
 const msgConsegna = (c, righe) => `Ciao ${primoNome(c)}! Sono arrivati i tuoi prodotti Yves Rocher: ${elencoProdotti(righe)}. Quando ci vediamo per la consegna? 😊`;
 const msgPagamento = (c, righe) => `Ciao ${primoNome(c)}! Ti ricordo il saldo di ${euro(somma(righe, r => r.importo))} per ${elencoProdotti(righe)}. Quando ti è comodo? Grazie! 😊`;
+const msgAuguri = (c) => `Tanti auguri ${primoNome(c)}! 🎂🎉 Ti auguro una giornata bellissima. Ho un piccolo pensiero per te da parte mia: quando ci vediamo? 😊`;
 const msgRicontatto = (x) => x.tipo === "riacquisto"
   ? `Ciao ${primoNome(x.cliente)}! Come ti stai trovando con ${x.prodotti}? Dovrebbe essere quasi finito: vuoi che te lo riordini? Ci sono anche le nuove promozioni Yves Rocher 😊`
   : `Ciao ${primoNome(x.cliente)}! È uscito il nuovo catalogo Yves Rocher con tante promozioni. Ti mando qualche proposta? 😊`;
 
 // ---------- Modifiche veloci con Annulla ----------
 // cambia: (riga) => riga modificata (o la stessa). Si applica a tutte le righe che soddisfano "filtro".
+const pulisciRighe = (righe) => (righe || []).map(r => r.articoli ? { ...r, articoli: r.articoli.map(({ _costo, ...a }) => a) } : r);
 async function aggiornaRighe(filtro, cambia, messaggio) {
   const prima = [];
   const batch = writeBatch(db);
   for (const o of ordini) {
-    if (!(o.righe || []).some(filtro)) continue;
-    prima.push({ id: o.id, righe: o.righe });
-    batch.set(doc(col("ordini"), o.id), { righe: o.righe.map(r => filtro(r) ? cambia(r) : r) }, { merge: true });
+    if (!(o.righe || []).some(r => filtro(r, o))) continue;
+    prima.push({ id: o.id, righe: pulisciRighe(o.righe) });
+    batch.set(doc(col("ordini"), o.id), { righe: pulisciRighe(o.righe.map(r => filtro(r, o) ? cambia(r) : r)) }, { merge: true });
   }
   if (!prima.length) return;
   await batch.commit();
@@ -184,7 +198,7 @@ async function aggiornaRighe(filtro, cambia, messaggio) {
 function gruppiPerCliente(filtro) {
   const m = new Map();
   for (const o of ordini) for (const r of o.righe || []) {
-    if (!filtro(r)) continue;
+    if (!filtro(r, o)) continue;
     const k = r.clienteId === STORICO ? STORICO + ":" + r.clientiStorico : r.clienteId;
     if (!m.has(k)) m.set(k, { chiave: k, clienteId: r.clienteId, nome: nomeRiga(r), righe: [] });
     m.get(k).righe.push(r);
@@ -204,7 +218,10 @@ function renderHome() {
     $("#w-new").addEventListener("click", () => apriOrdine());
     return;
   }
-  const consegne = gruppiPerCliente(r => !r.consegnato && r.clienteId !== SCORTA);
+  const consegne = gruppiPerCliente((r, o) => !r.consegnato && r.clienteId !== SCORTA && arrivato(o));
+  const inArrivo = ordini.filter(o => !arrivato(o)).sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+  const compleanni = clienti.map(c => ({ c, p: prossimoCompleanno(c.compleanno) }))
+    .filter(x => x.p && x.p.giorni <= 7 && x.c.auguriFatti !== x.p.data).sort((a, b) => a.p.giorni - b.p.giorni);
   const incassi = gruppiPerCliente(r => !isSpeciale(r.clienteId) && !r.pagato);
   const ric = daRicontattare(clienti, ordini, oggi(), Number(impostazioni.giorniRicontatto) || 0);
   const mese = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(oggi().slice(0, 7))));
@@ -219,7 +236,28 @@ function renderHome() {
     <button class="tile c-green" data-view-go="soldi"><div class="t-ico">🌿</div><div class="t-val num">${euro(mese.guadagnoAtteso)}</div><div class="t-lbl">guadagno di ${nomeMese}</div></button>
   </div>`;
 
-  if (!consegne.length && !incassi.length && !ric.length) h += `<div class="empty"><div class="e-ico">🎉</div><b>Tutto in ordine!</b><br>Niente da consegnare, nessuno ti deve soldi.</div>`;
+  if (!consegne.length && !incassi.length && !ric.length && !inArrivo.length && !compleanni.length) h += `<div class="empty"><div class="e-ico">🎉</div><b>Tutto in ordine!</b><br>Niente da consegnare, nessuno ti deve soldi.</div>`;
+
+  if (compleanni.length) {
+    h += `<div class="section"><h2>🎂 Compleanni</h2><span class="count c-pink">${compleanni.length}</span></div>`;
+    for (const { c, p } of compleanni) {
+      const quando = p.giorni === 0 ? "<b>Oggi!</b> 🎉" : p.giorni === 1 ? "Domani" : `Tra ${p.giorni} giorni · ${new Date(p.data + "T00:00").toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}`;
+      h += `<div class="card b-pink compleanno"><div class="who">${avatar(c.nome)}<div><h3>${esc(c.nome)}</h3><div class="sub">${quando}</div></div></div>
+        <div class="actions"><button class="wa" data-auguri="${c.id}">💬 Fai gli auguri</button><button class="c-pink" data-auguri-fatti="${c.id}">✓ Fatti</button></div></div>`;
+    }
+  }
+
+  if (inArrivo.length) {
+    h += `<div class="section" id="sec-arrivo"><h2>🚚 In arrivo</h2><span class="count c-blue">${inArrivo.length}</span></div>
+      <p class="section-hint">Ordini fatti a Yves Rocher non ancora arrivati. Quando arriva il pacco, tocca “È arrivato”.</p>`;
+    for (const o of inArrivo) {
+      const persone = [...new Set((o.righe || []).map(nomeRiga))].join(", ");
+      const giorni = Math.round((Date.parse(oggi() + "T00:00Z") - Date.parse((o.data || oggi()) + "T00:00Z")) / 86400000);
+      h += `<div class="card b-blue"><div class="row"><div><h3>Ordine del ${dataLunga(o.data)}</h3>
+          <div class="sub">${esc(persone)}</div></div>${giorni > 0 ? `<span class="badge c-blue" style="margin:0">${plurale(giorni, "giorno", "giorni")}</span>` : ""}</div>
+        <div class="actions"><button class="c-blue" data-arrivato="${o.id}">📬 È arrivato</button></div></div>`;
+    }
+  }
 
   if (consegne.length) {
     h += `<div class="section" id="sec-consegne"><h2>📦 Da consegnare</h2><span class="count c-orange">${consegne.length}</span></div>`;
@@ -259,7 +297,22 @@ function renderHome() {
   $$("[data-view-go]").forEach(b => b.addEventListener("click", () => vai(b.dataset.viewGo)));
   $$("[data-consegna]").forEach(b => b.addEventListener("click", () => {
     const g = trova(consegne, b.dataset.consegna);
-    aggiornaRighe(filtroGruppo(g, r => !r.consegnato), r => ({ ...r, consegnato: true }), `📦 ${g.nome}: consegnato`);
+    const f = filtroGruppo(g, r => !r.consegnato);
+    aggiornaRighe((r, o) => f(r) && arrivato(o), r => ({ ...r, consegnato: true }), `📦 ${g.nome}: consegnato`);
+  }));
+  $$("[data-arrivato]").forEach(b => b.addEventListener("click", async () => {
+    const id = b.dataset.arrivato;
+    await setDoc(doc(col("ordini"), id), { arrivato: true, arrivatoIl: oggi() }, { merge: true });
+    avviso("📬 Arrivato! Ora lo trovi in “Da consegnare”", () => setDoc(doc(col("ordini"), id), { arrivato: false, arrivatoIl: null }, { merge: true }));
+  }));
+  $$("[data-auguri]").forEach(b => b.addEventListener("click", () => {
+    const c = clienti.find(x => x.id === b.dataset.auguri);
+    apriWhatsApp(c, msgAuguri(c));
+  }));
+  $$("[data-auguri-fatti]").forEach(b => b.addEventListener("click", async () => {
+    const c = clienti.find(x => x.id === b.dataset.auguriFatti); const p = prossimoCompleanno(c.compleanno); const prima = c.auguriFatti || null;
+    await setDoc(doc(col("clienti"), c.id), { auguriFatti: p.data }, { merge: true });
+    avviso(`🎂 Auguri a ${primoNome(c)} fatti`, () => setDoc(doc(col("clienti"), c.id), { auguriFatti: prima }, { merge: true }));
   }));
   $$("[data-paga]").forEach(b => b.addEventListener("click", () => {
     const g = trova(incassi, b.dataset.paga);
@@ -346,7 +399,7 @@ function renderOrdini() {
     h += `<div class="card b-blue tap" data-open="${o.id}">
       <div class="row"><h3>${dataLunga(o.data)}</h3><span class="amount num" style="color:${c.guadagnoAtteso < 0 ? "var(--red)" : "var(--green)"}">${c.guadagnoAtteso >= 0 ? "+" : ""}${euro(c.guadagnoAtteso)}</span></div>
       <div class="sub">${esc(nomi)}</div>
-      ${c.daConsegnare ? `<span class="badge c-orange">📦 ${c.daConsegnare} da consegnare</span>` : ""}
+      ${!arrivato(o) ? `<span class="badge c-blue">🚚 In arrivo</span>` : c.daConsegnare ? `<span class="badge c-orange">📦 ${c.daConsegnare} da consegnare</span>` : ""}
       ${c.daIncassare > 0 ? `<span class="badge c-pink">💶 ${euro(c.daIncassare)} da incassare</span>` : ""}
       ${!c.daConsegnare && c.daIncassare <= 0 ? `<span class="badge c-green">✓ Tutto fatto</span>` : ""}
       ${o.daScorta ? `<span class="badge c-orange">📦 Dalla scorta</span>` : ""}
@@ -376,7 +429,7 @@ function testataSheet(titolo, indietro, passi) {
 
 // ---------- NUOVO / MODIFICA ORDINE (a passaggi) ----------
 function apriOrdine(o) {
-  const ord = o ? structuredClone(o) : { data: oggi(), costo: null, costoIoManuale: null, costoScortaManuale: null, daScorta: false, omaggiRicevuti: [], omaggiNote: "", note: "", righe: [] };
+  const ord = o ? structuredClone(o) : { data: oggi(), costo: null, costoIoManuale: null, costoScortaManuale: null, daScorta: false, arrivato: false, omaggiRicevuti: [], omaggiNote: "", note: "", righe: [] };
   ord.omaggiRicevuti ||= [];
   for (const r of ord.righe) {
     r.id ||= nuovoId(); r.omaggiDati ||= [];
@@ -657,6 +710,10 @@ function apriOrdine(o) {
         </div>`).join("")}
         <button class="big c-blue" id="add-cliente">＋ Aggiungi un'altra persona</button>
 
+        ${c.tuttoDaScorta ? "" : `<div class="yesno" style="margin-top:20px"><div class="yn-q">📬 Il pacco di Yves Rocher è arrivato?</div><div class="yn-b">
+          <button data-arr="1" class="${arrivato(ord) ? "on-yes" : ""}">👍 Sì, ce l'ho</button>
+          <button data-arr="0" class="${!arrivato(ord) ? "on-no" : ""}">🚚 Non ancora</button></div>
+          <div class="hint">Finché non arriva, le clienti non compaiono in “Da consegnare”.</div></div>`}
         ${sezioneCosto(c)}
 
         <div class="result ${haCosto ? (c.guadagnoAtteso >= 0 ? "c-green" : "c-pink") : "c-gold"}" id="risultato">${risultatoHtml(c, haCosto, ord.daScorta)}</div>
@@ -688,6 +745,11 @@ function apriOrdine(o) {
     $("#add-cliente").addEventListener("click", () => { ord.righe.push(rigaVuota()); idx = ord.righe.length - 1; nuovaRiga = true; cercaChi = ""; passo = "chi"; disegna(); });
     $("#costo")?.addEventListener("input", (e) => { ord.costo = e.target.value; segna(); aggiornaRisultato(); });
     $("#costoio")?.addEventListener("input", (e) => { ord.costoIoManuale = e.target.value; segna(); aggiornaRisultato(); });
+    $$("[data-arr]").forEach(b => b.addEventListener("click", () => {
+      ord.arrivato = b.dataset.arr === "1"; segna();
+      $$("[data-arr]").forEach(x => { x.className = ""; });
+      b.className = ord.arrivato ? "on-yes" : "on-no";
+    }));
     $("#costoscorta")?.addEventListener("input", (e) => { ord.costoScortaManuale = e.target.value; segna(); aggiornaRisultato(); });
     $("#data").addEventListener("change", (e) => { ord.data = e.target.value; segna(); });
     $("#note").addEventListener("input", (e) => { ord.note = e.target.value; segna(); });
@@ -711,7 +773,8 @@ function apriOrdine(o) {
     if (!righe.length) return avviso("Aggiungi almeno una persona con dei prodotti");
     const { id, ...resto } = ord;
     const dati = { ...resto, righe, costo: numIt(ord.costo),
-      costoIoManuale: manuale(ord.costoIoManuale), costoScortaManuale: manuale(ord.costoScortaManuale), daScorta: !!ord.daScorta, aggiornato: serverTimestamp() };
+      costoIoManuale: manuale(ord.costoIoManuale), costoScortaManuale: manuale(ord.costoScortaManuale), daScorta: !!ord.daScorta,
+      arrivato: calcolaOrdine(ordinePronto()).tuttoDaScorta ? true : arrivato(ord), aggiornato: serverTimestamp() };
     $("#salva").disabled = true;
     if (o) await setDoc(doc(col("ordini"), o.id), dati); else await addDoc(col("ordini"), dati);
     for (const p of nuoviPrezzi) setDoc(doc(col("catalogo"), slug(p.nome)), { nome: p.nome, prezzo: p.prezzo, ultimoUso: oggi() }, { merge: true });
@@ -742,14 +805,19 @@ function acquistiCliente(c) {
 
 function renderClienti() {
   if (!clienti.length) { $("#view").innerHTML = `<div class="empty"><div class="e-ico">👩</div><b>Nessuna cliente</b><br>Si aggiungono da sole quando crei un ordine.</div>`; return; }
-  let h = `<input type="search" id="cerca" class="search" placeholder="🔍 Cerca una cliente" value="${esc(cercaClienti)}">`;
+  const camp = impostazioni.campagna;
+  let h = `<button class="tile c-purple campagna-btn" id="apri-campagna"><div class="row"><div>
+      <div class="t-lbl" style="font-size:17px">📣 Scrivi a tutte le clienti</div>
+      <div style="font-size:14px;font-weight:500;opacity:.85">${camp ? `Messaggio in corso: inviato a ${(camp.inviati || []).length}` : "Nuovo catalogo, promozioni, ordine in partenza"}</div></div>
+      <span style="font-size:24px">›</span></div></button>
+    <input type="search" id="cerca" class="search" placeholder="🔍 Cerca una cliente" value="${esc(cercaClienti)}">`;
   const filtrate = clienti.filter(c => !cercaClienti || chiave(c.nome).includes(chiave(cercaClienti)));
   for (const c of filtrate) {
     const acq = acquistiCliente(c);
     const deve = somma(acq.filter(x => x.r.clienteId === c.id && !x.r.pagato), x => x.r.importo);
     const ultimo = acq.map(x => x.o.data).filter(Boolean).sort().pop();
     h += `<div class="card tap" data-cli="${c.id}"><div class="row"><div class="who">${avatar(c.nome)}<div><h3>${esc(c.nome)}</h3>
-      <div class="sub">${ultimo ? `Ultimo acquisto: ${dataLunga(ultimo)}` : "Nessun acquisto"}</div></div></div>
+      <div class="sub">${ultimo ? `Ultimo acquisto: ${dataLunga(ultimo)}` : "Nessun acquisto"}${c.compleanno ? ` · 🎂 ${compleannoTesto(c.compleanno)}` : ""}</div></div></div>
       ${deve ? `<span class="badge c-pink num" style="margin:0">deve ${euro(deve)}</span>` : ""}</div></div>`;
   }
   if (!filtrate.length) h += `<div class="empty">Nessuna cliente con questo nome.</div>`;
@@ -759,6 +827,93 @@ function renderClienti() {
     renderClienti(); const i = $("#cerca"); i.focus(); i.setSelectionRange(pos, pos);
   });
   $$("[data-cli]").forEach(el => el.addEventListener("click", () => apriCliente(clienti.find(c => c.id === el.dataset.cli))));
+  $("#apri-campagna").addEventListener("click", () => apriCampagna());
+}
+
+// ---------- Messaggio a tutte le clienti ----------
+const MODELLI = [
+  ["📖 Nuovo catalogo", "Ciao {nome}! 🌿 È uscito il nuovo catalogo Yves Rocher, con tante novità e promozioni. Vuoi che te lo mandi o che ti consigli qualcosa? 😊"],
+  ["🏷️ Promozioni", "Ciao {nome}! In questi giorni Yves Rocher ha delle promozioni speciali 🎉 Se ti serve qualcosa dimmelo e te lo ordino! 😊"],
+  ["📦 Sto per ordinare", "Ciao {nome}! Nei prossimi giorni faccio l'ordine Yves Rocher: se ti serve qualcosa scrivimi pure 😊"],
+  ["✍️ Scrivo io", "Ciao {nome}! "]
+];
+function apriCampagna(nuova) {
+  let camp = !nuova && impostazioni.campagna ? structuredClone(impostazioni.campagna) : null;
+  let bozza = camp?.testo || MODELLI[0][1];
+  let solo6mesi = camp?.solo6mesi || false;
+  sheetChiudi = null;
+  const salvaCamp = (dati) => setDoc(docImpostazioni(), { campagna: dati }, { merge: true });
+
+  const destinatarie = () => {
+    const limite = new Date(Date.parse(oggi() + "T00:00Z") - 183 * 86400000).toISOString().slice(0, 10);
+    return clienti.filter(c => !solo6mesi || acquistiCliente(c).some(x => (x.o.data || "") >= limite));
+  };
+
+  function schermataTesto() {
+    $("#sheet-body").innerHTML = testataSheet("Scrivi a tutte", false) + `
+      <div class="sh-main">
+        <div class="question">Cosa vuoi scrivere?</div>
+        <p class="q-hint">Scegli un messaggio pronto e modificalo come vuoi. Dove c'è <b>{nome}</b> metto il nome di ogni cliente.</p>
+        <div class="chips small-chips" style="margin-bottom:12px">${MODELLI.map(([t], i) => `<button class="chip" data-modello="${i}">${t}</button>`).join("")}</div>
+        <textarea id="camp-testo" style="min-height:150px">${esc(bozza)}</textarea>
+        <div class="yesno" style="margin-top:14px"><div class="yn-q">A chi?</div><div class="chips">
+          <button class="chip ${!solo6mesi ? "sel" : ""}" data-chi6="0">Tutte</button>
+          <button class="chip ${solo6mesi ? "sel" : ""}" data-chi6="1">Chi ha comprato negli ultimi 6 mesi</button></div></div>
+      </div>
+      <div class="sh-foot"><button class="big primary" id="camp-avanti">Avanti →</button></div>`;
+    $("#sh-back").addEventListener("click", () => chiudiSheet());
+    $$("[data-modello]").forEach(b => b.addEventListener("click", () => { bozza = MODELLI[+b.dataset.modello][1]; $("#camp-testo").value = bozza; }));
+    $("#camp-testo").addEventListener("input", (e) => { bozza = e.target.value; });
+    $$("[data-chi6]").forEach(b => b.addEventListener("click", () => { solo6mesi = b.dataset.chi6 === "1"; schermataTesto(); }));
+    $("#camp-avanti").addEventListener("click", async () => {
+      if (!bozza.trim()) return $("#camp-testo").focus();
+      const inviati = camp && camp.testo === bozza ? camp.inviati || [] : [];
+      camp = { testo: bozza, solo6mesi, creata: camp?.creata || oggi(), inviati };
+      await salvaCamp(camp);
+      schermataInvio();
+    });
+  }
+
+  function schermataInvio() {
+    const lista = destinatarie();
+    const conNumero = lista.filter(c => c.telefono), senza = lista.filter(c => !c.telefono);
+    const fatti = conNumero.filter(c => camp.inviati.includes(c.id)).length;
+    const anteprima = camp.testo.replaceAll("{nome}", primoNome(conNumero[0] || { nome: "Giulia" }));
+    $("#sheet-body").innerHTML = testataSheet("Scrivi a tutte", false) + `
+      <div class="sh-main">
+        <div class="question">Inviato a ${fatti} di ${conNumero.length}</div>
+        <div class="progress"><span style="width:${conNumero.length ? Math.round(fatti / conNumero.length * 100) : 0}%"></span></div>
+        <p class="q-hint" style="margin-top:12px">Tocca “Invia”: si apre WhatsApp con il messaggio pronto. Premi invia lì e torna qui per la prossima.</p>
+        <div class="card" style="background:var(--wa-soft);color:var(--text);font-size:15px">💬 ${esc(anteprima)}</div>
+        ${conNumero.map(c => { const ok = camp.inviati.includes(c.id); return `<div class="item invio ${ok ? "ok" : ""}">
+          ${avatar(c.nome)}<div class="i-name"><b>${esc(c.nome)}</b></div>
+          <button class="${ok ? "c-green" : "wa"} pill" data-invia="${c.id}">${ok ? "✓ Inviato" : "💬 Invia"}</button></div>`; }).join("")}
+        ${senza.length ? `<div class="section"><h2>📵 Senza numero</h2><span class="count c-gold">${senza.length}</span></div>
+          <p class="section-hint">Aggiungi il cellulare dalla scheda cliente per poterle scrivere.</p>
+          <div class="chips small-chips">${senza.map(c => `<span class="chip" style="box-shadow:none;opacity:.75">${esc(c.nome)}</span>`).join("")}</div>` : ""}
+        <div class="stack" style="margin-top:20px">
+          <button id="camp-modifica">✏️ Cambia il messaggio</button>
+          <button id="camp-fine" class="danger" style="text-align:center">✓ Ho finito, chiudi questo messaggio</button>
+        </div>
+      </div>`;
+    $("#sh-back").addEventListener("click", () => chiudiSheet());
+    $$("[data-invia]").forEach(b => b.addEventListener("click", async () => {
+      const c = clienti.find(x => x.id === b.dataset.invia);
+      window.open(linkWhatsApp(c.telefono, camp.testo.replaceAll("{nome}", primoNome(c))), "_blank");
+      if (!camp.inviati.includes(c.id)) { camp.inviati = [...camp.inviati, c.id]; await salvaCamp(camp); }
+      const y = $(".sh-main").scrollTop; schermataInvio(); $(".sh-main").scrollTop = y;
+    }));
+    $("#camp-modifica").addEventListener("click", () => { bozza = camp.testo; schermataTesto(); });
+    $("#camp-fine").addEventListener("click", async () => {
+      const prima = camp;
+      await setDoc(docImpostazioni(), { campagna: null }, { merge: true });
+      chiudiSheet(true);
+      avviso("📣 Messaggio chiuso", () => setDoc(docImpostazioni(), { campagna: prima }, { merge: true }));
+    });
+  }
+
+  if (camp) schermataInvio(); else schermataTesto();
+  apriSheet();
 }
 
 function apriCliente(c) {
@@ -766,13 +921,15 @@ function apriCliente(c) {
   const proprie = acq.filter(x => x.r.clienteId === c?.id);
   const speso = somma(proprie, x => x.r.importo);
   const daPagare = proprie.filter(x => !x.r.pagato).map(x => x.r);
-  const daConsegnare = proprie.filter(x => !x.r.consegnato).map(x => x.r);
+  const daConsegnare = proprie.filter(x => !x.r.consegnato && arrivato(x.o)).map(x => x.r);
+  const [cm, cg] = (c?.compleanno || "-").split("-");
   sheetChiudi = null;
   $("#sheet-body").innerHTML = testataSheet(c ? "Cliente" : "Nuova cliente", false) + `
     <div class="sh-main">
       ${c ? `<div style="text-align:center;margin:6px 0 16px">
           <div class="avatar ${coloreDi(c.nome)}" style="width:76px;height:76px;font-size:30px;margin:0 auto">${esc(iniziali(c.nome))}</div>
-          <div class="question" style="margin-top:8px">${esc(c.nome)}</div></div>
+          <div class="question" style="margin-top:8px">${esc(c.nome)}</div>
+          ${c.compleanno ? `<div class="muted">🎂 ${compleannoTesto(c.compleanno)}</div>` : ""}</div>
         <div class="tiles">
           <div class="tile c-blue"><div class="t-ico">🛍️</div><div class="t-val num">${euro(speso)}</div><div class="t-lbl">spesi in totale</div></div>
           <div class="tile ${daPagare.length ? "c-pink" : "c-green"}"><div class="t-ico">💶</div><div class="t-val num">${euro(somma(daPagare, r => r.importo))}</div><div class="t-lbl">da pagare</div></div>
@@ -786,7 +943,10 @@ function apriCliente(c) {
       <div class="yesno" style="margin-top:14px">
         <label style="margin-top:0">Nome</label><input id="c-nome" value="${esc(c?.nome)}" placeholder="Es. Giulia Rossi">
         <label>Cellulare (per WhatsApp)</label><input id="c-tel" type="tel" value="${esc(c?.telefono)}" placeholder="333 1234567">
-        <label>Note (tipo di pelle, gusti, compleanno…)</label><textarea id="c-note">${esc(c?.note)}</textarea>
+        <label>🎂 Compleanno (facoltativo)</label>
+        <div class="grid-compleanno"><select id="c-giorno"><option value="">Giorno</option>${Array.from({ length: 31 }, (_, i) => { const v = String(i + 1).padStart(2, "0"); return `<option value="${v}" ${cg === v ? "selected" : ""}>${i + 1}</option>`; }).join("")}</select>
+          <select id="c-mese"><option value="">Mese</option>${MESI.map((nm, i) => { const v = String(i + 1).padStart(2, "0"); return `<option value="${v}" ${cm === v ? "selected" : ""}>${nm}</option>`; }).join("")}</select></div>
+        <label>Note (tipo di pelle, gusti…)</label><textarea id="c-note">${esc(c?.note)}</textarea>
       </div>
       ${acq.length ? `<div class="section"><h2>🛍️ Acquisti</h2></div>${acq.map(({ o, r }) => `<div class="card" style="padding:12px 16px">
         <div class="row"><b>${dataLunga(o.data)}</b><span class="num">${r.clienteId === STORICO ? "ordine di gruppo" : euro(r.importo)}</span></div>
@@ -801,7 +961,9 @@ function apriCliente(c) {
   $("#wa-libero")?.addEventListener("click", () => apriWhatsApp(corrente(), `Ciao ${primoNome(corrente())}! `));
   $("#c-save").addEventListener("click", async () => {
     const nome = $("#c-nome").value.trim(); if (!nome) return $("#c-nome").focus();
-    const dati = { nome, telefono: $("#c-tel").value.trim(), note: $("#c-note").value };
+    const g = $("#c-giorno").value, m = $("#c-mese").value;
+    if ((g && !m) || (!g && m)) { avviso("Per il compleanno scegli sia il giorno sia il mese"); return; }
+    const dati = { nome, telefono: $("#c-tel").value.trim(), note: $("#c-note").value, compleanno: g && m ? `${m}-${g}` : null };
     if (c) await setDoc(doc(col("clienti"), c.id), dati, { merge: true }); else await addDoc(col("clienti"), dati);
     chiudiSheet(true); avviso("✓ Salvato");
   });
@@ -954,6 +1116,141 @@ function apriNuovoOmaggio() {
   apriSheet();
 }
 
+// ---------- NOTIFICHE (Worker Cloudflare) ----------
+let workerUrl = null;            // letto da notifiche-config.js
+async function leggiWorkerUrl() {
+  if (workerUrl !== null) return workerUrl;
+  try {
+    const t = await (await fetch("notifiche-config.js", { cache: "no-store" })).text();
+    workerUrl = (t.replace(/^\s*\/\/.*$/gm, "").match(/https:\/\/[^"'`\s]+/) || [""])[0].replace(/\/+$/, "");
+  } catch { workerUrl = ""; }
+  return workerUrl;
+}
+const NOTIFICHE_BASE = { ora: 9, compleanni: true, arrivi: true, pagamenti: true, ricontatti: false };
+const prefNotifiche = () => ({ ...NOTIFICHE_BASE, ...(impostazioni.notifiche || {}) });
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const daHome = () => window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+const b64uInBytes = (s) => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+const tokenCasuale = () => [...crypto.getRandomValues(new Uint8Array(24))].map(x => x.toString(16).padStart(2, "0")).join("");
+
+async function chiamaWorker(percorso, corpo) {
+  const url = await leggiWorkerUrl();
+  const r = await fetch(url + percorso, corpo ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) } : {});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.errore || `errore ${r.status}`);
+  return j;
+}
+
+async function iscrizioneDispositivo() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg ? reg.pushManager.getSubscription() : null;
+}
+
+async function disegnaNotifiche() {
+  const box = $("#box-notifiche"); if (!box) return;
+  const url = await leggiWorkerUrl();
+  const p = prefNotifiche();
+  let corpo;
+  if (!url) corpo = `<div class="hint" style="margin:0">Non ancora collegate: serve il Worker Cloudflare (vedi istruzioni).</div>`;
+  else if (isIOS() && !daHome()) corpo = `<div class="hint" style="margin:0">Su iPhone le notifiche funzionano solo con l'app aggiunta alla schermata Home:
+      in Safari tocca <b>Condividi</b> → <b>Aggiungi alla schermata Home</b>, poi apri l'app da lì.</div>`;
+  else if (!("PushManager" in window) || !("Notification" in window)) corpo = `<div class="hint" style="margin:0">Questo browser non supporta le notifiche.</div>`;
+  else if (Notification.permission === "denied") corpo = `<div class="hint" style="margin:0">Le notifiche sono bloccate. Su iPhone: Impostazioni → Notifiche → Ordini → Consenti notifiche.</div>`;
+  else {
+    const sub = await iscrizioneDispositivo();
+    if (!sub) corpo = `<div class="hint" style="margin:0 0 10px">Ti avviso io di compleanni, pacchi in ritardo e pagamenti da chiedere.</div>
+      <button class="big primary" id="notif-attiva">🔔 Attiva su questo dispositivo</button>`;
+    else corpo = `<div class="hint" style="margin:0 0 10px;color:var(--green)"><b>✓ Attive su questo dispositivo</b></div>
+      <div class="yn-q" style="font-size:16px">A che ora?</div>
+      <div class="chips small-chips">${[8, 9, 12, 18, 20].map(h => `<button class="chip ${p.ora === h ? "sel" : ""}" data-nora="${h}">${h}:00</button>`).join("")}</div>
+      <div class="yn-q" style="font-size:16px;margin-top:14px">Avvisami di…</div>
+      <div class="chips small-chips">${[["compleanni", "🎂 Compleanni"], ["arrivi", "🚚 Pacchi in ritardo"], ["pagamenti", "💶 Pagamenti da chiedere"], ["ricontatti", "💜 Clienti da sentire"]]
+        .map(([k, t]) => `<button class="chip ${p[k] ? "sel" : ""}" data-ntipo="${k}">${t}</button>`).join("")}</div>
+      <div class="stack" style="margin-top:14px"><button id="notif-prova">📨 Mandami una prova</button>
+        <button class="danger" id="notif-off" style="text-align:center">Disattiva su questo dispositivo</button></div>`;
+  }
+  box.innerHTML = `<div class="yn-q">🔔 Notifiche</div>${corpo}`;
+
+  $("#notif-attiva")?.addEventListener("click", attivaNotifiche);
+  $("#notif-prova")?.addEventListener("click", async () => {
+    try { await programmaNotifiche(true); await chiamaWorker("/prova", { utente: uid, token: impostazioni.pushToken }); avviso("📨 Inviata: arriva tra pochi secondi"); }
+    catch (e) { alert("Non sono riuscita a mandare la prova: " + e.message); }
+  });
+  $("#notif-off")?.addEventListener("click", async () => {
+    const sub = await iscrizioneDispositivo();
+    if (sub) { try { await chiamaWorker("/disiscrivi", { utente: uid, token: impostazioni.pushToken, endpoint: sub.endpoint }); } catch {} await sub.unsubscribe(); }
+    avviso("🔕 Notifiche disattivate su questo dispositivo"); disegnaNotifiche();
+  });
+  $$("[data-nora]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, ora: Number(b.dataset.nora) } }, { merge: true })));
+  $$("[data-ntipo]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, [b.dataset.ntipo]: !p[b.dataset.ntipo] } }, { merge: true })));
+}
+
+async function attivaNotifiche() {
+  try {
+    const permesso = await Notification.requestPermission();
+    if (permesso !== "granted") { avviso("Senza il permesso non posso mandarti notifiche"); return disegnaNotifiche(); }
+    const reg = await navigator.serviceWorker.ready;
+    const { chiave } = await chiamaWorker("/vapid");
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uInBytes(chiave) });
+    let token = impostazioni.pushToken;
+    if (!token) { token = tokenCasuale(); await setDoc(docImpostazioni(), { pushToken: token, notifiche: prefNotifiche() }, { merge: true }); impostazioni.pushToken = token; }
+    await chiamaWorker("/iscrivi", { utente: uid, token, subscription: sub.toJSON() });
+    await programmaNotifiche(true);
+    avviso("🔔 Notifiche attive!");
+  } catch (e) { alert("Non sono riuscita ad attivare le notifiche: " + e.message); }
+  disegnaNotifiche();
+}
+
+// Promemoria dei prossimi giorni, calcolati qui e mandati al Worker
+function calcolaPromemoria() {
+  const p = prefNotifiche();
+  const oraTxt = String(p.ora).padStart(2, "0") + ":00:00";
+  const quando = (giorno) => new Date(`${giorno}T${oraTxt}`).getTime();
+  const piu = (iso, n) => new Date(Date.parse(iso + "T00:00Z") + n * 86400000).toISOString().slice(0, 10);
+  const tra = (a, b) => Math.round((Date.parse(b + "T00:00Z") - Date.parse(a + "T00:00Z")) / 86400000);
+  const oggiIso = oggi(), lista = [];
+
+  if (p.compleanni) for (const c of clienti) {
+    const pc = prossimoCompleanno(c.compleanno);
+    if (pc && pc.giorni <= 14 && c.auguriFatti !== pc.data)
+      lista.push({ id: `comp:${c.id}:${pc.data}`, quando: quando(pc.data), titolo: `🎂 Oggi compie gli anni ${c.nome}`, testo: "Apri l'app e mandale gli auguri su WhatsApp." });
+  }
+  // riepilogo del giorno per i prossimi 7 giorni (si aggiorna ogni volta che apri l'app)
+  for (let i = 0; i < 7; i++) {
+    const g = piu(oggiIso, i), parti = [];
+    if (p.arrivi) {
+      const lenti = ordini.filter(o => !arrivato(o) && o.data && tra(o.data, g) >= 10);
+      if (lenti.length) parti.push(`🚚 ${lenti.length === 1 ? "1 ordine aspetta" : lenti.length + " ordini aspettano"} da più di 10 giorni`);
+    }
+    if (p.pagamenti) {
+      const righe = ordini.filter(o => arrivato(o) && o.data && tra(o.data, g) >= 14).flatMap(o => (o.righe || []).filter(r => !isSpeciale(r.clienteId) && !r.pagato));
+      if (righe.length) { const n = new Set(righe.map(r => r.clienteId)).size; parti.push(`💶 ${n === 1 ? "1 cliente deve" : n + " clienti devono"} pagarti ${euro(somma(righe, r => r.importo))}`); }
+    }
+    if (p.ricontatti) {
+      const n = daRicontattare(clienti, ordini, g, Number(impostazioni.giorniRicontatto) || 0).length;
+      if (n) parti.push(`💜 ${n === 1 ? "1 cliente da sentire" : n + " clienti da sentire"}`);
+    }
+    if (parti.length) lista.push({ id: `riep:${g}`, quando: quando(g), titolo: "🌿 Oggi da fare", testo: parti.join(" · ") });
+  }
+  return lista.filter(x => x.quando > Date.now() - 3600000);
+}
+
+let timerProgramma;
+function programmaNotificheTraPoco() { clearTimeout(timerProgramma); timerProgramma = setTimeout(() => programmaNotifiche(false), 4000); }
+async function programmaNotifiche(forza) {
+  if (!uid || !impostazioni.pushToken) return;
+  if (!(await leggiWorkerUrl())) return;
+  const promemoria = calcolaPromemoria();
+  const firma = JSON.stringify(promemoria);
+  let ultima = null; try { ultima = localStorage.getItem("ultimiPromemoria"); } catch {}
+  if (!forza && ultima === firma) return;     // niente di nuovo: non scrivo
+  try {
+    await chiamaWorker("/programma", { utente: uid, token: impostazioni.pushToken, promemoria });
+    try { localStorage.setItem("ultimiPromemoria", firma); } catch {}
+  } catch { /* offline: riprovo al prossimo cambio */ }
+}
+
 // ---------- SOLDI ----------
 function renderSoldi() {
   const nomeMese = (k) => new Date(k + "-01T00:00").toLocaleDateString("it-IT", { month: "long", year: "numeric" });
@@ -1013,6 +1310,7 @@ function renderSoldi() {
     </div>` : ""}
 
     <div class="section"><h2>⚙️ Impostazioni</h2></div>
+    <div class="yesno" id="box-notifiche"><div class="yn-q">🔔 Notifiche</div><div class="hint" style="margin:0">Controllo…</div></div>
     <div class="yesno"><div class="yn-q">💜 Avvisami delle clienti che non comprano da</div><div class="chips">
       ${[[0, "Mai"], [30, "1 mese"], [60, "2 mesi"], [90, "3 mesi"]].map(([v, t]) =>
         `<button class="chip ${Number(impostazioni.giorniRicontatto) === v ? "sel" : ""}" data-giorni="${v}">${t}</button>`).join("")}</div></div>
@@ -1024,11 +1322,12 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v12</p>`;
+    <p class="versione" style="text-align:center">v14</p>`;
   const vaiDettaglio = () => $("#dettaglio-mese").scrollIntoView({ behavior: "smooth", block: "start" });
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); vaiDettaglio(); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); vaiDettaglio(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); vaiDettaglio(); } });
+  disegnaNotifiche();
   $$("[data-giorni]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { giorniRicontatto: Number(b.dataset.giorni) }, { merge: true })));
   $("#b-backup").addEventListener("click", scaricaBackup);
   $("#b-export").addEventListener("click", esportaCsv);
