@@ -1,0 +1,10 @@
+{
+  "name": "Ordini Beauty",
+  "short_name": "Ordini",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f3",
+  "theme_color": "#2f5d3a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

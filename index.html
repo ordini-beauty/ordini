@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ordini Beauty</title>
+<meta name="theme-color" content="#2f5d3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Ordini">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="screen hidden">
+    <div class="login-box">
+      <h1>Ordini Beauty</h1>
+      <p class="muted">Clienti, consegne e guadagni</p>
+      <form id="login-form">
+        <input type="email" id="login-email" placeholder="Email" required autocomplete="username">
+        <input type="password" id="login-pass" placeholder="Password" required autocomplete="current-password">
+        <button type="submit" class="primary">Entra</button>
+        <button type="button" id="btn-register" class="link">Crea account</button>
+        <button type="button" id="btn-reset" class="link">Password dimenticata</button>
+        <p id="login-error" class="error"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- App -->
+  <section id="app" class="screen hidden">
+    <header class="topbar">
+      <h1 id="view-title">Da fare</h1>
+      <button id="btn-new" class="primary small">+ Nuovo</button>
+    </header>
+    <main id="view"></main>
+    <nav class="tabbar">
+      <button data-view="todo" class="active">Da fare</button>
+      <button data-view="ordini">Ordini</button>
+      <button data-view="clienti">Clienti</button>
+      <button data-view="omaggi">Omaggi</button>
+      <button data-view="riepilogo">Riepilogo</button>
+    </nav>
+  </section>
+
+  <!-- Modale -->
+  <dialog id="modal"><div id="modal-body"></div></dialog>
+  <datalist id="dl-prodotti"></datalist>
+  <datalist id="dl-omaggi"></datalist>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
