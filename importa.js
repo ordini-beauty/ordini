@@ -1,6 +1,6 @@
 // Conversione del vecchio file Excel (Data, Cliente, Dettaglio, Omaggio, Fatturato, Entrate, Uscite, Guadagno)
 // in ordini dell'app. Funzione pura: riceve le righe del foglio come array di array.
-import { IO, STORICO, chiave } from "./calc.js?v=14";
+import { IO, STORICO, chiave } from "./calc.js?v=15";
 
 export function parseEuro(v) {
   if (typeof v === "number") return v;
@@ -44,6 +44,53 @@ export function parseOmaggi(testo) {
     if (esist) esist.qta += qta; else out.push({ nome, qta: Math.max(1, qta) });
   }
   return out;
+}
+
+// "Cipria (MTA), Set uomo (NR), aceto, detox, blush (io), 3 burrocacao (MF), calendario x2"
+// → [{ nome, qta, sigla }]. Una sigla tra parentesi vale anche per i prodotti senza sigla scritti subito prima.
+export function dividiProdotti(testo) {
+  const pezzi = [];
+  let buf = "", liv = 0;
+  for (const ch of pulisci(testo)) {
+    if (ch === "(") liv++; if (ch === ")") liv = Math.max(0, liv - 1);
+    if ((ch === "," || ch === ";") && liv === 0) { pezzi.push(buf); buf = ""; } else buf += ch;
+  }
+  pezzi.push(buf);
+  const out = [];
+  for (let p of pezzi) {
+    p = p.trim(); if (!p) continue;
+    let sigla = null, m;
+    if ((m = p.match(/^(.*?)\s*\(([A-Za-zÀ-ÿ]{1,5})\)\s*$/))) { p = m[1].trim(); sigla = m[2]; }
+    let qta = 1;
+    if ((m = p.match(/^(\d+)\s*(?:x|×)?\s+(.+)$/i))) { qta = +m[1]; p = m[2]; }
+    else if ((m = p.match(/^(.+?)\s*(?:x|×)\s*(\d+)$/i))) { p = m[1]; qta = +m[2]; }
+    if (!p) continue;
+    out.push({ nome: p.charAt(0).toUpperCase() + p.slice(1), qta: Math.max(1, qta), sigla, siglaPropria: !!sigla });
+  }
+  // la sigla si estende ai prodotti precedenti senza sigla
+  for (let i = out.length - 1, ultima = null; i >= 0; i--) {
+    if (out[i].sigla) ultima = out[i].sigla; else if (ultima) out[i].sigla = ultima;
+  }
+  // ...ma i prodotti finali senza nessuna sigla dopo restano senza
+  return out;
+}
+
+// Abbina una sigla (es. "MTA", "NR", "io") a uno dei nomi: restituisce l'indice, "io", oppure null
+export function abbinaSigla(sigla, nomi) {
+  if (!sigla) return null;
+  const s = sigla.toUpperCase();
+  if (s === "IO") return "io";
+  const punti = nomi.map(n => {
+    const parole = chiave(n).split(" ").filter(Boolean);
+    const iniz = parole.map(w => w[0]).join("").toUpperCase();
+    if (iniz === s) return 3;
+    if (s.startsWith(iniz) || iniz.startsWith(s)) return 2;
+    if (iniz[0] === s[0]) return 1;
+    return 0;
+  });
+  const max = Math.max(...punti);
+  if (max === 0 || punti.filter(x => x === max).length > 1) return null;
+  return punti.indexOf(max);
 }
 
 export function dividiClienti(testo) {

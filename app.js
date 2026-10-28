@@ -4,8 +4,8 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, SCORTA, STORICO,
-  isSpeciale, statoScorta, guadagnoPerMese, inventarioScorta, completaCostiScorta, costoDaConfezione, omaggiOrdine } from "./calc.js?v=14";
-import { convertiFoglio, parseOmaggi } from "./importa.js?v=14";
+  isSpeciale, statoScorta, guadagnoPerMese, inventarioScorta, completaCostiScorta, costoDaConfezione, omaggiOrdine } from "./calc.js?v=15";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=15";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -167,7 +167,10 @@ function apriWhatsApp(cliente, testo) {
   window.open(linkWhatsApp(cliente?.telefono, testo), "_blank");
 }
 const elencoProdotti = (righe) => righe.map(r => r.prodotti).filter(Boolean).join(", ");
-const msgConsegna = (c, righe) => `Ciao ${primoNome(c)}! Sono arrivati i tuoi prodotti Yves Rocher: ${elencoProdotti(righe)}. Quando ci vediamo per la consegna? 😊`;
+const nomeArticolo = (a) => `${Number(a.qta) > 1 ? a.qta + "× " : ""}${a.nome}`;
+const daConsegnareDi = (r) => r.articoli?.length ? r.articoli.filter(a => a.consegnato === false || (a.consegnato === undefined && !r.consegnato)).map(nomeArticolo).join(", ") : (r.consegnato ? "" : r.prodotti);
+const elencoDaConsegnare = (righe) => righe.map(daConsegnareDi).filter(Boolean).join(", ");
+const msgConsegna = (c, righe) => `Ciao ${primoNome(c)}! Sono arrivati i tuoi prodotti Yves Rocher: ${elencoDaConsegnare(righe)}. Quando ci vediamo per la consegna? 😊`;
 const msgPagamento = (c, righe) => `Ciao ${primoNome(c)}! Ti ricordo il saldo di ${euro(somma(righe, r => r.importo))} per ${elencoProdotti(righe)}. Quando ti è comodo? Grazie! 😊`;
 const msgAuguri = (c) => `Tanti auguri ${primoNome(c)}! 🎂🎉 Ti auguro una giornata bellissima. Ho un piccolo pensiero per te da parte mia: quando ci vediamo? 😊`;
 const msgRicontatto = (x) => x.tipo === "riacquisto"
@@ -265,7 +268,7 @@ function renderHome() {
       const c = clienti.find(x => x.id === g.clienteId);
       h += `<div class="card b-orange"><div class="who">${avatar(g.nome, g.clienteId === IO)}<div><h3>${esc(g.nome)}</h3>
           <div class="sub">${plurale(g.righe.length, "ordine", "ordini")}</div></div></div>
-        <div class="what">${esc(elencoProdotti(g.righe))}</div>
+        <div class="what">${esc(elencoDaConsegnare(g.righe))}</div>
         <div class="actions"><button class="c-orange" data-consegna="${esc(g.chiave)}">✓ ${g.clienteId === IO ? "Ce l'ho" : "Consegnato"}</button>
           ${c ? `<button class="wa" data-wa-consegna="${esc(g.chiave)}">💬 Avvisala</button>` : ""}</div></div>`;
     }
@@ -298,7 +301,7 @@ function renderHome() {
   $$("[data-consegna]").forEach(b => b.addEventListener("click", () => {
     const g = trova(consegne, b.dataset.consegna);
     const f = filtroGruppo(g, r => !r.consegnato);
-    aggiornaRighe((r, o) => f(r) && arrivato(o), r => ({ ...r, consegnato: true }), `📦 ${g.nome}: consegnato`);
+    aggiornaRighe((r, o) => f(r) && arrivato(o), r => ({ ...r, consegnato: true, ...(r.articoli ? { articoli: r.articoli.map(a => ({ ...a, consegnato: true })) } : {}) }), `📦 ${g.nome}: consegnato`);
   }));
   $$("[data-arrivato]").forEach(b => b.addEventListener("click", async () => {
     const id = b.dataset.arrivato;
@@ -434,6 +437,7 @@ function apriOrdine(o) {
   for (const r of ord.righe) {
     r.id ||= nuovoId(); r.omaggiDati ||= [];
     if (!r.articoli) r.articoli = r.prodotti || r.importo ? [{ nome: r.prodotti || "Prodotti", prezzo: Number(r.importo) || 0 }] : [];
+    for (const a of r.articoli) if (typeof a.consegnato !== "boolean") a.consegnato = !!r.consegnato;
     r.sconto ||= 0;
   }
   let modificato = false;
@@ -449,6 +453,7 @@ function apriOrdine(o) {
   const totaleRiga = (r) => Math.round((somma(r.articoli, a => (Number(a.prezzo) || 0) * qta(a)) - (Number(r.sconto) || 0)) * 100) / 100;
   const nomeArt = (a) => `${qta(a) > 1 ? qta(a) + "× " : ""}${a.nome}`;
   const rigaPronta = ({ _tipo, ...r }) => ({ ...r, importo: totaleRiga(r), prodotti: r.articoli.map(nomeArt).join(", "),
+    consegnato: r.articoli.length ? r.articoli.every(a => a.consegnato === true) : !!r.consegnato,
     articoli: r.articoli.map(({ _costo, ...a }) => a) });
   const segna = () => { modificato = true; };
   const manuale = (v) => v === "" || v == null ? null : numIt(v);
@@ -509,7 +514,7 @@ function apriOrdine(o) {
 
   const disegna = () => {
     const r = ord.righe[idx];
-    ({ chi: passoChi, cosa: passoCosa, stato: passoStato, panoramica: passoPanoramica })[passo](r);
+    ({ chi: passoChi, cosa: passoCosa, stato: passoStato, panoramica: passoPanoramica, dividi: passoDividi })[passo](r);
     $("#sh-back").addEventListener("click", indietro);
     apriSheet();
     $(".sh-main").scrollTop = 0;
@@ -524,6 +529,7 @@ function apriOrdine(o) {
       } else passo = "cosa";
     } else if (passo === "cosa") passo = nuovaRiga ? "chi" : "panoramica";
     else if (passo === "stato") passo = "cosa";
+    else if (passo === "dividi") passo = "panoramica";
     else return chiudiSheet();
     disegna();
   }
@@ -582,7 +588,13 @@ function apriOrdine(o) {
         <p class="q-hint">${isConf ? "Scrivi il nome e quanto valgono a catalogo i prodotti dentro (di solito è scritto sul catalogo o sulla scatola). Poi venderai i prodotti uno per uno." :
           isScorta ? "Scrivi i prodotti del bundle, il prezzo di catalogo e quanti pezzi. Non sono spese: li ritrovi nella scorta quando li vendi." : "Scrivi un prodotto alla volta con il suo prezzo."}</p>
         <div class="items">${r.articoli.map((a, i) => `<div class="item"><div class="i-name">${a.confezione ? "🎄 " : ""}${a.fonte === "scorta" ? `<span class="tag-scorta">${a.da ? `🎄 ${esc(a.da)}` : "📦 scorta"}</span> ` : ""}${esc(nomeArt(a))}${a.confezione ? ` <span class="muted" style="font-size:14px">(valore prodotti)</span>` : ""}</div>
-            <b class="num">${euro((Number(a.prezzo) || 0) * qta(a))}</b><button class="x" data-xart="${i}" aria-label="Togli">×</button></div>`).join("")}</div>
+            ${a.fonte === "scorta" || a.confezione ? `<b class="num">${euro((Number(a.prezzo) || 0) * qta(a))}</b>` :
+              `<input class="prezzo-in" data-part="${i}" inputmode="decimal" value="${esc(inIt(Number(a.prezzo) || 0))}" aria-label="Prezzo">`}
+            <button class="x" data-xart="${i}" aria-label="Togli">×</button></div>
+            ${isIo && a.fonte !== "scorta" ? `<button class="sposta" data-sposta="${i}">🔁 È da rivendere</button>` : ""}
+            ${isScorta && !a.confezione ? `<button class="sposta" data-sposta="${i}">🙋‍♀️ È per me</button>` : ""}`).join("")}</div>
+        ${r.articoli.length === 1 && /[,;]/.test(r.articoli[0].nome) && !r.articoli[0].fonte ? `<div class="banner" style="display:block">
+          📝 Questi prodotti sono scritti tutti insieme.<div class="actions" style="margin-top:8px"><button class="c-gold" id="dividi-singoli">✂️ Dividi in prodotti singoli</button></div></div>` : ""}
         ${inv.length ? `<div class="scorta-box"><div class="gift-sub" style="margin-top:0">📦 Dalla tua scorta</div>
           <div class="chips small-chips">${inv.map(v => v.tipo === "confezione"
             ? `<button class="chip scorta ${inAttesaScorta?.confezione && chiave(inAttesaScorta.confezione) === chiave(v.nome) ? "sel" : ""}" data-conf="${esc(v.nome)}">🎄 ${esc(v.nome)} <span class="muted">· ancora ${euro(v.valoreResiduo)}</span></button>`
@@ -615,7 +627,7 @@ function apriOrdine(o) {
       if (!nome) { nomeIn.focus(); return false; }
       const prezzo = numIt(prezzoIn.value);
       const pezzi = isScorta ? Math.max(1, parseInt($("#art-qta").value) || 1) : 1;
-      const art = { nome, prezzo, qta: pezzi };
+      const art = { nome, prezzo, qta: pezzi, consegnato: isScorta || !!r.consegnato };
       if (isConf) art.confezione = true;
       if (inAttesaScorta?.confezione) {
         art.fonte = "scorta"; art.da = inAttesaScorta.confezione; art.costo = costoDaConfezione(inv, inAttesaScorta.confezione, prezzo);
@@ -641,6 +653,31 @@ function apriOrdine(o) {
     $$("[data-conf]").forEach(b => b.addEventListener("click", () => { inAttesaScorta = { confezione: b.dataset.conf }; ridisegna(); $("#art-nome").focus(); }));
     $$("[data-tipo]").forEach(b => b.addEventListener("click", () => { r._tipo = b.dataset.tipo; ridisegna(); }));
     $$("[data-xart]").forEach(b => b.addEventListener("click", () => { r.articoli.splice(+b.dataset.xart, 1); segna(); ridisegna(); }));
+    $$("[data-part]").forEach(inp => inp.addEventListener("input", () => {
+      r.articoli[+inp.dataset.part].prezzo = numIt(inp.value) / 1; segna(); $(".total-line b").textContent = euro(totaleRiga(r));
+    }));
+    $$("[data-sposta]").forEach(b => b.addEventListener("click", () => {
+      const a = r.articoli.splice(+b.dataset.sposta, 1)[0];
+      const verso = isIo ? SCORTA : IO;
+      let dest = ord.righe.find(x => x !== r && x.clienteId === verso);
+      if (!dest) { dest = { ...rigaVuota(), clienteId: verso, pagato: true, consegnato: true }; ord.righe.push(dest); }
+      dest.articoli.push({ nome: a.nome, prezzo: a.prezzo, qta: qta(a), consegnato: verso === SCORTA ? true : a.consegnato !== false });
+      segna();
+      avviso(verso === SCORTA ? `🔁 ${a.nome}: spostato in Da rivendere` : `🙋‍♀️ ${a.nome}: spostato in Per me`);
+      if (!r.articoli.length) { ord.righe.splice(ord.righe.indexOf(r), 1); nuovaRiga = false; passo = "panoramica"; return disegna(); }
+      ridisegna();
+    }));
+    $("#dividi-singoli")?.addEventListener("click", () => {
+      const tot = totaleRiga(r) + (Number(r.sconto) || 0), cons = r.articoli[0].consegnato;
+      const parti = dividiProdotti(r.articoli[0].nome);
+      if (parti.length < 2) return avviso("Non riesco a dividerli: separali con una virgola");
+      const quota = Math.floor(tot / parti.length * 100) / 100;
+      r.articoli = parti.map((x, i) => ({ nome: x.nome, qta: 1, consegnato: cons,
+        prezzo: i === parti.length - 1 ? Math.round((tot - quota * (parti.length - 1)) * 100) / 100 : quota }));
+      r.articoli.forEach((a, i) => { if (parti[i].qta > 1) { a.qta = parti[i].qta; a.prezzo = Math.round(a.prezzo / a.qta * 10000) / 10000; } });
+      segna(); ridisegna();
+      avviso("✂️ Diviso: il totale è diviso in parti uguali, correggi i prezzi se li sai");
+    });
     $("#art-sconto").addEventListener("input", (e) => { r.sconto = numIt(e.target.value); segna(); $(".total-line b").textContent = euro(totaleRiga(r)); });
     $("#avanti").addEventListener("click", () => {
       if (nomeIn.value.trim()) aggiungi();   // prodotto scritto ma non aggiunto: lo aggiungo io
@@ -672,7 +709,10 @@ function apriOrdine(o) {
         <div class="question">Ultime cose</div>
         <p class="q-hint">Totale ${euro(totaleRiga(r))}</p>
         ${isIo ? "" : yn("pagato", "💶 Ha già pagato?")}
-        ${yn("consegnato", isIo ? "📦 Ce l'hai già?" : "📦 Le hai già consegnato i prodotti?")}
+        ${r.articoli.length > 1 ? `<div class="yesno"><div class="yn-q">📦 ${isIo ? "Cosa hai già?" : "Cosa le hai già consegnato?"}</div>
+            ${r.articoli.map((a, i) => `<button class="spunta ${a.consegnato ? "on" : ""}" data-cons="${i}"><span class="box">${a.consegnato ? "✓" : ""}</span>${esc(nomeArt(a))}</button>`).join("")}
+            <div class="yn-b" style="margin-top:10px"><button data-tutti="1">✓ Tutto</button><button data-tutti="0">Niente</button></div></div>`
+          : yn("consegnato", isIo ? "📦 Ce l'hai già?" : "📦 Le hai già consegnato i prodotti?")}
         ${isIo ? "" : `<div class="yesno"><div class="yn-q">🎁 Le hai regalato qualcosa?</div>
           <div class="hint" style="margin:-4px 0 10px">Tocca un omaggio che hai: si scala da solo dal totale.</div>
           ${editorOmaggi(r.omaggiDati, "od", giacenzaAttuale().filter(v => v.giacenza > 0).map(v => ({ nome: v.nome, giacenza: v.giacenza })), "Altro omaggio")}</div>
@@ -684,11 +724,93 @@ function apriOrdine(o) {
       </div>
       <div class="sh-foot"><button class="big primary" id="fatto">✓ Fatto</button></div>`;
     const ridisegna = () => { passoStato(r); $("#sh-back").addEventListener("click", indietro); };
-    $$("[data-yn]").forEach(b => b.addEventListener("click", () => { r[b.dataset.yn] = b.dataset.v === "1"; segna(); ridisegna(); }));
+    $$("[data-yn]").forEach(b => b.addEventListener("click", () => {
+      r[b.dataset.yn] = b.dataset.v === "1";
+      if (b.dataset.yn === "consegnato") r.articoli.forEach(a => { a.consegnato = r.consegnato; });
+      segna(); ridisegna();
+    }));
+    $$("[data-cons]").forEach(b => b.addEventListener("click", () => { const a = r.articoli[+b.dataset.cons]; a.consegnato = !a.consegnato; segna(); ridisegna(); }));
+    $$("[data-tutti]").forEach(b => b.addEventListener("click", () => { r.articoli.forEach(a => { a.consegnato = b.dataset.tutti === "1"; }); segna(); ridisegna(); }));
     $$("[data-ric]").forEach(b => b.addEventListener("click", () => { r.riacquistoGiorni = b.dataset.ric ? Number(b.dataset.ric) : null; segna(); ridisegna(); }));
     if (!isIo) collegaOmaggi(r.omaggiDati, "od", ridisegna);
     $("#rimuovi").addEventListener("click", rimuoviRiga);
     $("#fatto").addEventListener("click", () => { nuovaRiga = false; passo = "panoramica"; disegna(); });
+  }
+
+  // Dividi un ordine di gruppo (importato dal vecchio Excel) tra le clienti
+  let divisione = null;
+  function passoDividi(r) {
+    const nomi = String(r.clientiStorico || "").split(",").map(x => x.trim()).filter(Boolean);
+    const rigaIo = ord.righe.find(x => x.clienteId === IO && (x.prodotti === "Acquisti personali" || x.articoli?.[0]?.nome === "Acquisti personali"));
+    const budgetClienti = Number(r.importo) || totaleRiga(r);
+    const budgetMio = rigaIo ? totaleRiga(rigaIo) : 0;
+    if (!divisione) divisione = dividiProdotti(r.prodotti || r.articoli.map(a => a.nome).join(", ")).map(x => {
+      const ab = abbinaSigla(x.sigla, nomi);
+      return { nome: x.nome, qta: x.qta, sigla: x.siglaPropria ? x.sigla : null, chi: ab === null ? null : ab === "io" ? IO : "n" + ab, prezzo: "" };
+    });
+    const dei = (f) => divisione.filter(f);
+    const assegnatoC = dei(x => x.chi?.startsWith("n")).reduce((s, x) => s + numIt(x.prezzo), 0);
+    const assegnatoM = dei(x => x.chi === IO || x.chi === SCORTA).reduce((s, x) => s + numIt(x.prezzo), 0);
+    const chip = (x, i, val, testo, cls = "") => `<button class="chip ${cls} ${x.chi === val ? "sel" : ""}" data-chi-div="${i}" data-val="${val}">${testo}</button>`;
+    $("#sheet-body").innerHTML = testataSheet("Chi ha preso cosa?", true) + `
+      <div class="sh-main">
+        <div class="question">Chi ha preso cosa?</div>
+        <p class="q-hint">Tocca il nome sotto ogni prodotto. Ho già usato le sigle che avevi scritto (es. MTA, NR) per proporti la persona: controlla.</p>
+        <div class="card" style="font-size:15px">
+          <div class="money-row"><span>👩 Pagato dalle clienti</span><b class="num">${euro(assegnatoC)} di ${euro(budgetClienti)}</b></div>
+          ${budgetMio ? `<div class="money-row"><span>🙋‍♀️ Tuoi / da rivendere</span><b class="num">${euro(assegnatoM)} di ${euro(budgetMio)}</b></div>` : ""}
+          <div class="hint">Se non sai un prezzo lascialo vuoto: divido il resto in parti uguali.</div>
+        </div>
+        ${divisione.map((x, i) => `<div class="card div-item ${x.chi ? "" : "da-fare"}">
+          <div class="row"><b>${x.qta > 1 ? x.qta + "× " : ""}${esc(x.nome)}</b>${x.sigla ? `<span class="badge c-gold" style="margin:0">(${esc(x.sigla)})</span>` : ""}</div>
+          <div class="chips small-chips" style="margin:10px 0">${nomi.map((n, j) => chip(x, i, "n" + j, esc(n.split(" ")[0]))).join("")}
+            ${chip(x, i, IO, "🙋‍♀️ Me", "me")}${chip(x, i, SCORTA, "📦 Da rivendere", "scorta")}</div>
+          <input class="prezzo-div" data-prezzo-div="${i}" inputmode="decimal" placeholder="Prezzo € (facoltativo)" value="${esc(x.prezzo)}">
+        </div>`).join("")}
+      </div>
+      <div class="sh-foot"><button class="big primary" id="div-ok">✂️ Dividi</button></div>`;
+    $("#sh-back").addEventListener("click", indietro);
+    $$("[data-chi-div]").forEach(b => b.addEventListener("click", () => {
+      divisione[+b.dataset.chiDiv].chi = b.dataset.val;
+      const y = $(".sh-main").scrollTop; passoDividi(r); $(".sh-main").scrollTop = y;
+    }));
+    $$("[data-prezzo-div]").forEach(inp => inp.addEventListener("change", () => {
+      divisione[+inp.dataset.prezzoDiv].prezzo = inp.value;
+      const y = $(".sh-main").scrollTop; passoDividi(r); $(".sh-main").scrollTop = y;
+    }));
+    $("#div-ok").addEventListener("click", async () => {
+      $$("[data-prezzo-div]").forEach(inp => { divisione[+inp.dataset.prezzoDiv].prezzo = inp.value; });
+      if (divisione.some(x => !x.chi)) { avviso("Scegli a chi va ogni prodotto"); $(".div-item.da-fare")?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+      // ripartisce il budget: prezzi scritti + resto in parti uguali sui prodotti senza prezzo
+      const ripartisci = (lista, budget) => {
+        const scritti = lista.reduce((s, x) => s + (x.prezzo === "" ? 0 : numIt(x.prezzo)), 0);
+        const vuoti = lista.filter(x => x.prezzo === "");
+        const resto = Math.round((budget - scritti) * 100) / 100;
+        if (vuoti.length && resto < 0) return `I prezzi scritti superano il totale di ${euro(budget)}`;
+        const q = vuoti.length ? Math.floor(resto / vuoti.length * 100) / 100 : 0;
+        vuoti.forEach((x, k) => { x._tot = k === vuoti.length - 1 ? Math.round((resto - q * (vuoti.length - 1)) * 100) / 100 : q; });
+        lista.forEach(x => { if (x.prezzo !== "") x._tot = numIt(x.prezzo); });
+        return null;
+      };
+      const clientiL = dei(x => x.chi.startsWith("n")), mieiL = dei(x => x.chi === IO || x.chi === SCORTA);
+      const err = ripartisci(clientiL, budgetClienti) || ripartisci(mieiL, budgetMio);
+      if (err) return avviso(err);
+      const art = (x, cons) => ({ nome: x.nome, qta: x.qta, prezzo: Math.round((x._tot / x.qta) * 10000) / 10000, consegnato: cons });
+      const nuove = [];
+      for (let j = 0; j < nomi.length; j++) {
+        const miei = clientiL.filter(x => x.chi === "n" + j); if (!miei.length) continue;
+        let cli = clienti.find(c => chiave(c.nome) === chiave(nomi[j]));
+        if (!cli) { const ref = await addDoc(col("clienti"), { nome: nomi[j], telefono: "", note: "" }); cli = { id: ref.id, nome: nomi[j] }; clienti.push(cli); }
+        nuove.push({ ...rigaVuota(), clienteId: cli.id, articoli: miei.map(x => art(x, !!r.consegnato)), pagato: !!r.pagato, consegnato: !!r.consegnato });
+      }
+      const perMe = mieiL.filter(x => x.chi === IO), scorta = mieiL.filter(x => x.chi === SCORTA);
+      if (perMe.length) nuove.push({ ...(rigaIo || rigaVuota()), id: rigaIo?.id || nuovoId(), clienteId: IO, articoli: perMe.map(x => art(x, true)), sconto: 0, pagato: true, consegnato: true });
+      if (scorta.length) nuove.push({ ...rigaVuota(), clienteId: SCORTA, articoli: scorta.map(x => art(x, true)), pagato: true, consegnato: true });
+      ord.righe = ord.righe.filter(x => x !== r && x !== rigaIo).concat(nuove);
+      if (rigaIo && !perMe.length && !scorta.length) ord.righe.push(rigaIo);  // nessun prodotto mio: tengo la riga com'era
+      segna(); divisione = null; passo = "panoramica"; disegna();
+      avviso(`✂️ Diviso tra ${plurale(nuove.length, "persona", "persone")}: ricordati di salvare l'ordine`);
+    });
   }
 
   // Riepilogo dell'ordine
@@ -705,7 +827,9 @@ function apriOrdine(o) {
             <div class="sub">${esc(r.prodotti)}</div></div></div><div class="amount num">${euro(r.importo)}</div></div>
           ${r.clienteId === SCORTA ? `<span class="badge c-orange">💰 soldi anticipati, non spese</span>` : `
           ${r.clienteId === IO ? "" : `<span class="badge ${r.pagato ? "c-green" : "c-pink"}">${r.pagato ? "✓ Pagato" : "💶 Da pagare"}</span>`}
-          <span class="badge ${r.consegnato ? "c-green" : "c-orange"}">${r.consegnato ? "✓ Consegnato" : "📦 Da consegnare"}</span>`}
+          ${(() => { const n = r.articoli.length, k = r.articoli.filter(a => a.consegnato === true).length;
+            return r.consegnato ? `<span class="badge c-green">✓ Consegnato</span>` : k > 0 && n > 1 ? `<span class="badge c-orange">📦 ${k} di ${n} consegnati</span>` : `<span class="badge c-orange">📦 Da consegnare</span>`; })()}`}
+          ${r.clienteId === STORICO ? `<div class="actions"><button class="c-gold" data-dividi="${i}">✂️ Dividi tra le clienti</button></div>` : ""}
           ${r.omaggiDati?.length ? `<span class="badge c-gold">🎁 ${r.omaggiDati.reduce((s, x) => s + x.qta, 0)}</span>` : ""}
         </div>`).join("")}
         <button class="big c-blue" id="add-cliente">＋ Aggiungi un'altra persona</button>
@@ -741,7 +865,11 @@ function apriOrdine(o) {
       box.className = "result " + (hc ? (cc.guadagnoAtteso >= 0 ? "c-green" : "c-pink") : "c-gold");
       box.innerHTML = risultatoHtml(cc, hc, ord.daScorta);
     };
-    $$("[data-riga]").forEach(el => el.addEventListener("click", () => { idx = +el.dataset.riga; passo = "cosa"; disegna(); }));
+    $$("[data-riga]").forEach(el => el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-dividi]")) return;
+      idx = +el.dataset.riga; passo = "cosa"; disegna();
+    }));
+    $$("[data-dividi]").forEach(b => b.addEventListener("click", () => { idx = +b.dataset.dividi; divisione = null; passo = "dividi"; disegna(); }));
     $("#add-cliente").addEventListener("click", () => { ord.righe.push(rigaVuota()); idx = ord.righe.length - 1; nuovaRiga = true; cercaChi = ""; passo = "chi"; disegna(); });
     $("#costo")?.addEventListener("input", (e) => { ord.costo = e.target.value; segna(); aggiornaRisultato(); });
     $("#costoio")?.addEventListener("input", (e) => { ord.costoIoManuale = e.target.value; segna(); aggiornaRisultato(); });
@@ -1322,7 +1450,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v14</p>`;
+    <p class="versione" style="text-align:center">v15</p>`;
   const vaiDettaglio = () => $("#dettaglio-mese").scrollIntoView({ behavior: "smooth", block: "start" });
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); vaiDettaglio(); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); vaiDettaglio(); });
