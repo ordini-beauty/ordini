@@ -13,11 +13,20 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
+  <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
+    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 5</h2>
+    <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
+      (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
+    <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
+      <b>https://</b> e finisce con <b>github.io/…</b></p>
+  </div>
+  <script>document.getElementById("avvio").remove();</script>
   <!-- Login -->
   <section id="login" class="screen hidden">
     <div class="login-box">
       <h1>Ordini Beauty</h1>
-      <p class="muted">Clienti, consegne e guadagni</p>
+      <p class="muted">Clienti, consegne e guadagni · v5</p>
       <form id="login-form">
         <input type="email" id="login-email" placeholder="Email" required autocomplete="username">
         <input type="password" id="login-pass" placeholder="Password" required autocomplete="current-password">
@@ -52,7 +61,7 @@
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v5)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>

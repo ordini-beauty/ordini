@@ -3,14 +3,24 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
 import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO } from "./calc.js";
 import { convertiFoglio } from "./importa.js";
 
-// ---------- Firebase ----------
-if (!firebaseConfig?.apiKey || /INSERISCI/.test(JSON.stringify(firebaseConfig))) {
-  throw new Error("firebase-config.js contiene ancora i valori di esempio “INSERISCI…”: incolla la configurazione del tuo progetto Firebase.");
+// ---------- Configurazione ----------
+// Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
+async function leggiConfig() {
+  const r = await fetch("firebase-config.js", { cache: "no-store" });
+  if (!r.ok) throw new Error(`firebase-config.js non trovato (errore ${r.status}). Deve stare nella stessa cartella di index.html.`);
+  const testo = (await r.text()).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const cfg = {};
+  for (const m of testo.matchAll(/["']?(apiKey|authDomain|projectId|storageBucket|messagingSenderId|appId|measurementId)["']?\s*:\s*["'`]([^"'`]+)["'`]/g)) cfg[m[1]] = m[2].trim();
+  if (!cfg.apiKey || !cfg.projectId || !cfg.appId) throw new Error("In firebase-config.js non trovo apiKey, projectId e appId. Incolla il blocco di configurazione copiato dalla console Firebase.");
+  if (/INSERISCI/.test(JSON.stringify(cfg))) throw new Error("firebase-config.js contiene ancora i valori di esempio “INSERISCI…”: incolla la configurazione del tuo progetto Firebase.");
+  return cfg;
 }
+const firebaseConfig = await leggiConfig();
+
+// ---------- Firebase ----------
 window.__appAvviata = true;
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
