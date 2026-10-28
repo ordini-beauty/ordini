@@ -50,6 +50,34 @@
   <datalist id="dl-prodotti"></datalist>
   <datalist id="dl-omaggi"></datalist>
 
+  <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
+  <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi</h2>
+    <div id="diagnosi-testo"></div>
+  </section>
+  <script>
+    window.__errori = [];
+    addEventListener("error", function (e) {
+      var t = e.target;
+      if (t && t.tagName === "SCRIPT") window.__errori.push("Impossibile caricare " + (t.src || "uno script"));
+      else window.__errori.push(e.message || String(e.error));
+    }, true);
+    addEventListener("unhandledrejection", function (e) {
+      window.__errori.push(String((e.reason && (e.reason.code || e.reason.message)) || e.reason));
+    });
+    setTimeout(function () {
+      if (!document.querySelector("#login.hidden") || !document.querySelector("#app.hidden")) return;
+      var motivi = [];
+      if (location.protocol === "file:") motivi.push("Hai aperto il file direttamente dal computer. L'app va aperta dal suo indirizzo web (GitHub Pages).");
+      if (!window.__appAvviata) motivi.push("Il codice dell'app non è partito: spesso è firebase-config.js non compilato o con un errore di battitura.");
+      if (!navigator.onLine) motivi.push("Il dispositivo è offline: al primo avvio serve la connessione.");
+      document.getElementById("diagnosi-testo").innerHTML =
+        "<ul>" + motivi.map(function (m) { return "<li>" + m + "</li>"; }).join("") + "</ul>" +
+        (window.__errori.length ? "<p><b>Dettaglio tecnico:</b></p><pre style='white-space:pre-wrap;background:#f3f3f3;padding:10px;border-radius:8px'>" +
+          window.__errori.join("\n").replace(/</g, "&lt;") + "</pre>" : "");
+      document.getElementById("diagnosi").classList.remove("hidden");
+    }, 5000);
+  </script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

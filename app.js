@@ -8,6 +8,10 @@ import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWh
 import { convertiFoglio } from "./importa.js";
 
 // ---------- Firebase ----------
+if (!firebaseConfig?.apiKey || /INSERISCI/.test(JSON.stringify(firebaseConfig))) {
+  throw new Error("firebase-config.js contiene ancora i valori di esempio “INSERISCI…”: incolla la configurazione del tuo progetto Firebase.");
+}
+window.__appAvviata = true;
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
 // Cache locale: funziona anche offline e sincronizza quando torna la rete
