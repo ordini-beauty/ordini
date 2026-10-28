@@ -10,12 +10,12 @@
 <meta name="apple-mobile-web-app-title" content="Ordini">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
   <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
   <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
-    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 7</h2>
+    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 12</h2>
     <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
       (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
     <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
@@ -36,7 +36,7 @@
         <button type="button" id="btn-reset" class="link small-link">Password dimenticata</button>
         <p id="login-error" class="error"></p>
       </form>
-      <p class="versione">v7</p>
+      <p class="versione">v12</p>
     </div>
   </section>
 
@@ -67,7 +67,7 @@
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v7)</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v12)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>
@@ -95,6 +95,6 @@
       document.getElementById("diagnosi").classList.remove("hidden");
     }, 5000);
   </script>
-  <script type="module" src="app.js?v=7"></script>
+  <script type="module" src="app.js?v=12"></script>
 </body>
 </html>

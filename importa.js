@@ -1,6 +1,6 @@
 // Conversione del vecchio file Excel (Data, Cliente, Dettaglio, Omaggio, Fatturato, Entrate, Uscite, Guadagno)
 // in ordini dell'app. Funzione pura: riceve le righe del foglio come array di array.
-import { IO, STORICO, chiave } from "./calc.js?v=7";
+import { IO, STORICO, chiave } from "./calc.js?v=12";
 
 export function parseEuro(v) {
   if (typeof v === "number") return v;
@@ -29,6 +29,22 @@ export function parseData(v) {
 }
 
 const pulisci = (s) => String(s ?? "").replace(/\s*\n\s*/g, " ").trim();
+
+// "Mousse detergente, 3 mini prodotti Natale, 30 campioncini, siero x2" → [{nome, qta}]
+export function parseOmaggi(testo) {
+  const out = [];
+  for (let pezzo of pulisci(testo).split(/[,;+]|\s+e\s+/i)) {
+    pezzo = pezzo.replace(/^[-•*\s]+|[.\s]+$/g, "").trim();
+    if (!pezzo) continue;
+    let qta = 1, m;
+    if ((m = pezzo.match(/^(\d+)\s*(?:x|×|pz\.?|pezzi)?\s+(.+)$/i))) { qta = +m[1]; pezzo = m[2]; }
+    else if ((m = pezzo.match(/^(.+?)\s*(?:x|×)\s*(\d+)$/i))) { pezzo = m[1]; qta = +m[2]; }
+    const nome = pezzo.charAt(0).toUpperCase() + pezzo.slice(1);
+    const esist = out.find(x => chiave(x.nome) === chiave(nome));
+    if (esist) esist.qta += qta; else out.push({ nome, qta: Math.max(1, qta) });
+  }
+  return out;
+}
 
 export function dividiClienti(testo) {
   const nomi = pulisci(testo).split(/,|;|\s+e\s+|\//i).map(s => s.trim()).filter(Boolean);
@@ -70,7 +86,8 @@ export function convertiFoglio(righeFoglio) {
     }
     if (!righe.length) { scartate.push({ riga: iHead + i + 2, motivo: "nessun cliente" }); return; }
 
-    ordini.push({ data, costo: uscite, costoIoManuale: null, omaggiRicevuti: [], omaggiNote: pulisci(r[C.omaggio]),
+    const testoOmaggi = pulisci(r[C.omaggio]);
+    ordini.push({ data, costo: uscite, costoIoManuale: null, omaggiRicevuti: parseOmaggi(testoOmaggi), omaggiNote: "", omaggiNoteOriginale: testoOmaggi,
       note: "Importato da Excel", importato: true, righe,
       _controllo: { fatturato, entrate, uscite } });
   });

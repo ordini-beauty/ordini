@@ -218,3 +218,50 @@ label { display: block; font-size: 15px; font-weight: 600; margin: 12px 0 6px; }
   justify-content: space-between; box-shadow: 0 8px 30px rgba(0,0,0,.25); font-weight: 600; animation: scendi .25s ease-out; }
 @keyframes scendi { from { transform: translateY(-20px); opacity: 0; } to { transform: none; opacity: 1; } }
 .toast button { background: rgba(255,255,255,.18); color: #fff; padding: 9px 14px; flex: none; }
+
+.chip.scorta { background: var(--orange-soft); color: var(--orange); }
+.mese-riga { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 10px; width: 100%;
+  background: none; padding: 10px 4px; border-radius: 12px; font-weight: 600; text-align: left; }
+.mese-riga + .mese-riga { border-top: 1px solid var(--line); border-radius: 0; }
+.mese-riga.sel { background: var(--green-soft); border-radius: 12px; }
+.mese-riga .mr-nome { text-transform: capitalize; font-size: 15px; }
+.mese-riga .mr-barra { height: 12px; background: var(--bg); border-radius: 6px; overflow: hidden; }
+.mese-riga .mr-barra span { display: block; height: 100%; border-radius: 6px; }
+.mese-riga .mr-barra .pos { background: var(--green); }
+.mese-riga .mr-barra .neg { background: var(--red); }
+.mese-riga .mr-val { font-size: 15px; min-width: 84px; text-align: right; }
+
+/* ---------- Omaggi ---------- */
+.tiles3 { grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tiles3 .tile { padding: 12px; }
+.tiles3 .t-val { font-size: 24px; }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--line); padding: 4px; border-radius: 16px; margin: 14px 0; }
+.segmented button { background: none; padding: 10px; border-radius: 12px; color: var(--muted); }
+.segmented button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+.gift-sub { font-size: 14px; font-weight: 700; color: var(--muted); margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .03em; }
+.gift-pill { display: inline-block; background: var(--gold-soft); color: var(--gold); border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0; font-size: 15px; font-weight: 600; }
+.regalo-riga { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; font-size: 15px; }
+.regalo-riga .gift-pill { margin: 0; }
+.avatar.mini { width: 28px; height: 28px; font-size: 12px; display: inline-grid; }
+.x-mini { background: none; color: var(--muted); padding: 0 0 0 10px; font-size: 20px; font-weight: 400; }
+details.storia { margin-top: 10px; border-top: 1px solid var(--line); }
+details.storia summary { padding: 10px 0 4px; font-size: 15px; font-weight: 600; color: var(--gold); cursor: pointer; }
+.evento { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 15px; }
+.ev-ico { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 15px; }
+.gift-item .i-name { font-weight: 600; }
+.stepper { display: flex; align-items: center; gap: 4px; }
+.stepper button { width: 40px; height: 40px; padding: 0; border-radius: 50%; background: var(--gold-soft); color: var(--gold); font-size: 20px; }
+.stepper b { min-width: 30px; text-align: center; font-size: 18px; }
+.small-chips .chip { padding: 8px 12px; font-size: 15px; }
+.gift-chip { background: var(--gold-soft); color: var(--gold); box-shadow: none; }
+.gift-chip .muted { color: inherit; opacity: .7; font-weight: 500; }
+
+/* ---------- Scorta ---------- */
+.scorta-box { background: var(--orange-soft); border-radius: 18px; padding: 12px; margin-bottom: 12px; }
+.scorta-box .gift-sub { color: var(--orange); }
+.scorta-box .chip.scorta { background: var(--card); }
+.scorta-box .chip.scorta.sel { background: var(--orange); color: #fff; }
+.scorta-box .chip .muted { color: inherit; opacity: .7; font-weight: 500; }
+.tag-scorta { display: inline-block; font-size: 12px; font-weight: 700; color: var(--orange); background: var(--orange-soft); border-radius: 999px; padding: 2px 8px; }
+.big-tag { font-size: 14px; padding: 6px 4px 6px 12px; display: flex; justify-content: space-between; align-items: center; }
+.add-box .two input#art-qta { text-align: center; }

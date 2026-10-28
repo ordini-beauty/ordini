@@ -3,8 +3,9 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO } from "./calc.js?v=7";
-import { convertiFoglio } from "./importa.js?v=7";
+import { calcolaOrdine, riepilogoPeriodo, giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, SCORTA, STORICO,
+  isSpeciale, statoScorta, guadagnoPerMese, inventarioScorta, completaCostiScorta, costoDaConfezione, omaggiOrdine } from "./calc.js?v=12";
+import { convertiFoglio, parseOmaggi } from "./importa.js?v=12";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -34,6 +35,7 @@ let unsub = [];
 let vista = "home";
 let meseSel = oggi().slice(0, 7);
 let cercaClienti = "";
+let vistaOmaggi = "ordini";
 
 // ---------- Utilità ----------
 const col = (nome) => collection(db, "utenti", uid, nome);
@@ -51,7 +53,7 @@ const slug = (s) => chiave(s).replace(/[^a-z0-9àèéìòù]+/g, "-").replace(/^
 const somma = (arr, f) => arr.reduce((s, x) => s + (Number(f(x)) || 0), 0);
 const plurale = (n, uno, tanti) => `${n} ${n === 1 ? uno : tanti}`;
 
-const nomeRiga = (r) => r.clienteId === IO ? "Per me" : r.clienteId === STORICO ? (r.clientiStorico || "Più clienti")
+const nomeRiga = (r) => r.clienteId === IO ? "Per me" : r.clienteId === SCORTA ? "Da rivendere" : r.clienteId === STORICO ? (r.clientiStorico || "Più clienti")
   : (clienti.find(c => c.id === r.clienteId)?.nome || "Cliente eliminata");
 const primoNome = (c) => String(c?.nome || "").split(" ")[0];
 
@@ -60,6 +62,7 @@ const PALETTE = ["c-pink", "c-orange", "c-purple", "c-blue", "c-green", "c-gold"
 const coloreDi = (nome) => PALETTE[[...chiave(nome)].reduce((s, ch) => s + ch.charCodeAt(0), 0) % PALETTE.length];
 const iniziali = (nome) => String(nome || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0].toUpperCase()).join("") || "?";
 const avatar = (nome, isIo) => `<div class="avatar ${isIo ? "c-pink" : coloreDi(nome)}">${isIo ? "🙋‍♀️" : esc(iniziali(nome))}</div>`;
+const avatarRiga = (r) => r.clienteId === SCORTA ? `<div class="avatar c-orange">📦</div>` : avatar(nomeRiga(r), r.clienteId === IO);
 
 // ---------- Avvisi (con Annulla) ----------
 let toastTimer;
@@ -80,7 +83,7 @@ onAuthStateChanged(auth, (user) => {
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   const ascolta = (nome, cb) => unsub.push(onSnapshot(col(nome), s => { cb(s.docs.map(d => ({ id: d.id, ...d.data() }))); render(); }));
   ascolta("clienti", d => clienti = d.sort((a, b) => a.nome.localeCompare(b.nome, "it")));
-  ascolta("ordini", d => ordini = d.sort((a, b) => (b.data || "").localeCompare(a.data || "")));
+  ascolta("ordini", d => ordini = completaCostiScorta(d.sort((a, b) => (b.data || "").localeCompare(a.data || ""))));
   ascolta("catalogo", d => catalogo = d);
   ascolta("movimentiOmaggi", d => movimenti = d);
   unsub.push(onSnapshot(docImpostazioni(), s => { impostazioni = { giorniRicontatto: 60, ultimoBackup: null, ...(s.data() || {}) }; render(); }));
@@ -201,8 +204,8 @@ function renderHome() {
     $("#w-new").addEventListener("click", () => apriOrdine());
     return;
   }
-  const consegne = gruppiPerCliente(r => !r.consegnato);
-  const incassi = gruppiPerCliente(r => r.clienteId !== IO && !r.pagato);
+  const consegne = gruppiPerCliente(r => !r.consegnato && r.clienteId !== SCORTA);
+  const incassi = gruppiPerCliente(r => !isSpeciale(r.clienteId) && !r.pagato);
   const ric = daRicontattare(clienti, ordini, oggi(), Number(impostazioni.giorniRicontatto) || 0);
   const mese = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(oggi().slice(0, 7))));
   const totIncassi = somma(incassi.flatMap(g => g.righe), r => r.importo);
@@ -260,7 +263,7 @@ function renderHome() {
   }));
   $$("[data-paga]").forEach(b => b.addEventListener("click", () => {
     const g = trova(incassi, b.dataset.paga);
-    aggiornaRighe(filtroGruppo(g, r => r.clienteId !== IO && !r.pagato), r => ({ ...r, pagato: true }), `💶 ${g.nome}: ${euro(somma(g.righe, r => r.importo))} incassati`);
+    aggiornaRighe(filtroGruppo(g, r => !isSpeciale(r.clienteId) && !r.pagato), r => ({ ...r, pagato: true }), `💶 ${g.nome}: ${euro(somma(g.righe, r => r.importo))} incassati`);
   }));
   $$("[data-wa-consegna]").forEach(b => b.addEventListener("click", () => {
     const g = trova(consegne, b.dataset.waConsegna); const c = clienti.find(x => x.id === g.clienteId);
@@ -346,7 +349,11 @@ function renderOrdini() {
       ${c.daConsegnare ? `<span class="badge c-orange">📦 ${c.daConsegnare} da consegnare</span>` : ""}
       ${c.daIncassare > 0 ? `<span class="badge c-pink">💶 ${euro(c.daIncassare)} da incassare</span>` : ""}
       ${!c.daConsegnare && c.daIncassare <= 0 ? `<span class="badge c-green">✓ Tutto fatto</span>` : ""}
-      ${!o.costo ? `<span class="badge c-gold">🧾 Manca quanto hai pagato</span>` : ""}
+      ${o.daScorta ? `<span class="badge c-orange">📦 Dalla scorta</span>` : ""}
+      ${(() => { const x = omaggiOrdine(o); return x.nArrivati || x.nRegalati ? `<span class="badge c-gold">🎁 ${x.nArrivati ? `${x.nArrivati} arrivati` : ""}${x.nArrivati && x.nRegalati ? " · " : ""}${x.nRegalati ? `${x.nRegalati} regalati` : ""}</span>` : ""; })()}
+      ${c.quotaScorta > 0 ? `<span class="badge c-orange">💰 ${euro(c.quotaScorta)} in scorta</span>` : ""}
+      ${c.usatoScorta > 0 && !o.daScorta ? `<span class="badge c-orange">📦 ${c.tuttoDaScorta ? "Dalla scorta" : "In parte dalla scorta"}</span>` : ""}
+      ${!o.costo && !c.tuttoDaScorta ? `<span class="badge c-gold">🧾 ${o.daScorta ? "Manca il costo" : "Manca quanto hai pagato"}</span>` : ""}
     </div>`;
   }
   $("#view").innerHTML = h;
@@ -369,7 +376,7 @@ function testataSheet(titolo, indietro, passi) {
 
 // ---------- NUOVO / MODIFICA ORDINE (a passaggi) ----------
 function apriOrdine(o) {
-  const ord = o ? structuredClone(o) : { data: oggi(), costo: null, costoIoManuale: null, omaggiRicevuti: [], omaggiNote: "", note: "", righe: [] };
+  const ord = o ? structuredClone(o) : { data: oggi(), costo: null, costoIoManuale: null, costoScortaManuale: null, daScorta: false, omaggiRicevuti: [], omaggiNote: "", note: "", righe: [] };
   ord.omaggiRicevuti ||= [];
   for (const r of ord.righe) {
     r.id ||= nuovoId(); r.omaggiDati ||= [];
@@ -385,9 +392,67 @@ function apriOrdine(o) {
   let cercaChi = "", mostraNuovaCliente = false;
 
   sheetChiudi = () => !modificato || confirm("Uscire senza salvare? Le modifiche andranno perse.");
-  const totaleRiga = (r) => Math.round((somma(r.articoli, a => a.prezzo) - (Number(r.sconto) || 0)) * 100) / 100;
-  const rigaPronta = (r) => ({ ...r, importo: totaleRiga(r), prodotti: r.articoli.map(a => a.nome).join(", ") });
+  const qta = (a) => Math.max(1, Number(a.qta) || 1);
+  const totaleRiga = (r) => Math.round((somma(r.articoli, a => (Number(a.prezzo) || 0) * qta(a)) - (Number(r.sconto) || 0)) * 100) / 100;
+  const nomeArt = (a) => `${qta(a) > 1 ? qta(a) + "× " : ""}${a.nome}`;
+  const rigaPronta = ({ _tipo, ...r }) => ({ ...r, importo: totaleRiga(r), prodotti: r.articoli.map(nomeArt).join(", "),
+    articoli: r.articoli.map(({ _costo, ...a }) => a) });
   const segna = () => { modificato = true; };
+  const manuale = (v) => v === "" || v == null ? null : numIt(v);
+  const ordinePronto = () => ({ ...ord, righe: ord.righe.map(rigaPronta), costo: numIt(ord.costo),
+    costoIoManuale: manuale(ord.costoIoManuale), costoScortaManuale: manuale(ord.costoScortaManuale) });
+
+  // Giacenza omaggi tenendo conto delle modifiche non ancora salvate di quest'ordine
+  const giacenzaAttuale = () => giacenzaOmaggi([...ordini.filter(x => x.id !== o?.id), { ...ord, id: o?.id || "nuovo" }], movimenti);
+
+  // Elenco omaggi con − quantità + e suggerimenti da toccare
+  function editorOmaggi(lista, pref, suggerimenti, segnaposto) {
+    const presenti = new Set(lista.map(x => chiave(x.nome)));
+    const sugg = suggerimenti.filter(x => !presenti.has(chiave(x.nome))).slice(0, 12);
+    return `<div class="items">${lista.map((x, i) => `<div class="item gift-item"><div class="i-name">${esc(x.nome)}</div>
+        <div class="stepper"><button data-${pref}-d="${i}" data-d="-1" aria-label="Uno in meno">−</button><b>${x.qta}</b>
+        <button data-${pref}-d="${i}" data-d="1" aria-label="Uno in più">＋</button></div></div>`).join("")}</div>
+      ${sugg.length ? `<div class="chips small-chips" style="margin-bottom:10px">${sugg.map(x =>
+        `<button class="chip gift-chip" data-${pref}-s="${esc(x.nome)}">＋ ${esc(x.nome)}${x.giacenza !== undefined ? ` <span class="muted">· ne hai ${x.giacenza}</span>` : ""}</button>`).join("")}</div>` : ""}
+      <div class="two" style="display:grid;grid-template-columns:1fr 110px;gap:8px"><input id="${pref}-nome" list="dl-omaggi" placeholder="${segnaposto}" autocomplete="off">
+        <button class="c-gold" id="${pref}-add">＋ Aggiungi</button></div>`;
+  }
+  function collegaOmaggi(lista, pref, ridisegna) {
+    const aggiungi = (nome) => { const e = lista.find(x => chiave(x.nome) === chiave(nome)); if (e) e.qta++; else lista.push({ nome, qta: 1 }); segna(); ridisegna(); };
+    $$(`[data-${pref}-d]`).forEach(b => b.addEventListener("click", () => {
+      const x = lista[+b.getAttribute(`data-${pref}-d`)]; x.qta += Number(b.dataset.d);
+      if (x.qta <= 0) lista.splice(lista.indexOf(x), 1);
+      segna(); ridisegna();
+    }));
+    $$(`[data-${pref}-s]`).forEach(b => b.addEventListener("click", () => aggiungi(b.getAttribute(`data-${pref}-s`))));
+    $(`#${pref}-add`)?.addEventListener("click", () => { const n = $(`#${pref}-nome`).value.trim(); if (!n) return $(`#${pref}-nome`).focus(); aggiungi(n); });
+    $(`#${pref}-nome`)?.addEventListener("keydown", (e) => { if (e.key === "Enter") $(`#${pref}-add`).click(); });
+  }
+
+  function riquadroOmaggi() {
+    const nomiNoti = giacenzaAttuale().map(v => ({ nome: v.nome }));
+    const regalati = ord.righe.filter(r => r.omaggiDati?.length);
+    return `<div class="yesno gift-box"><div class="yn-q">🎁 Omaggi di quest'ordine</div>
+      <div class="gift-sub">📥 Arrivati da Yves Rocher con l'ordine</div>
+      ${ord.omaggiNote ? `<div class="hint" style="margin:0 0 8px">📝 Dal vecchio file: ${esc(ord.omaggiNote)}</div>` : ""}
+      ${editorOmaggi(ord.omaggiRicevuti, "or", nomiNoti, "Es. campioncini crema")}
+      <div class="gift-sub" style="margin-top:16px">🤝 Regalati alle clienti</div>
+      ${regalati.length ? regalati.map(r => `<div class="regalo-riga"><b>${esc(nomeRiga(r))}</b>: ${esc(r.omaggiDati.map(x => `${x.qta > 1 ? x.qta + "× " : ""}${x.nome}`).join(", "))}</div>`).join("")
+        : `<div class="hint" style="margin:0">Nessuno. Si aggiungono toccando una cliente, all'ultimo passaggio.</div>`}
+    </div>`;
+  }
+
+  function sezioneCosto(c) {
+    if (ord.daScorta) // ordini della versione 8
+      return `<div class="yesno" style="margin-top:20px"><div class="yn-q">📦 Quanto ti erano costati questi prodotti presi dalla scorta?</div>
+        <input id="costo" class="money" inputmode="decimal" placeholder="0,00 €" value="${esc(inIt(ord.costo))}"></div>`;
+    if (c.tuttoDaScorta)
+      return `<div class="yesno" style="margin-top:20px"><div class="yn-q">📦 Tutto preso dalla tua scorta</div>
+        <div class="hint" style="margin:0">Non hai pagato niente a Yves Rocher: il costo dei prodotti lo calcolo io da quanto avevi pagato bundle e calendari.</div></div>`;
+    return `<div class="yesno" style="margin-top:20px"><div class="yn-q">🧾 Quanto hai pagato a Yves Rocher?</div>
+        <input id="costo" class="money" inputmode="decimal" placeholder="0,00 €" value="${esc(inIt(ord.costo))}">
+        <div class="hint">${c.valoreDaScorta > 0 ? "Solo per i prodotti ordinati adesso: quelli presi dalla scorta li conto io." : "Il totale dell'ordine che hai fatto all'azienda. Puoi metterlo anche dopo."}</div></div>`;
+  }
 
   const disegna = () => {
     const r = ord.righe[idx];
@@ -413,17 +478,18 @@ function apriOrdine(o) {
   // Passo 1 — Per chi?
   function passoChi(r) {
     const recenti = new Map();
-    for (const oo of ordini) for (const rr of oo.righe || []) if (rr.clienteId && rr.clienteId !== IO && rr.clienteId !== STORICO && !recenti.has(rr.clienteId)) recenti.set(rr.clienteId, true);
+    for (const oo of ordini) for (const rr of oo.righe || []) if (rr.clienteId && !isSpeciale(rr.clienteId) && rr.clienteId !== STORICO && !recenti.has(rr.clienteId)) recenti.set(rr.clienteId, true);
     const ordinate = [...clienti].sort((a, b) => (recenti.has(b.id) - recenti.has(a.id)) || a.nome.localeCompare(b.nome, "it"));
     const filtrate = ordinate.filter(c => !cercaChi || chiave(c.nome).includes(chiave(cercaChi))).slice(0, 40);
     $("#sheet-body").innerHTML = testataSheet(o ? "Ordine" : "Nuovo ordine", !nuovaRiga || ord.righe.length > 1, 1) + `
       <div class="sh-main">
         <div class="question">Per chi è?</div>
-        <p class="q-hint">Tocca il nome della cliente.</p>
+        <p class="q-hint">Tocca il nome della cliente. Usa “📦 Da rivendere” per i bundle che compri per rivenderli.</p>
         ${clienti.length > 8 ? `<input id="chi-cerca" class="search" placeholder="🔍 Cerca per nome" value="${esc(cercaChi)}">` : ""}
         <div class="chips">
           ${r.clienteId === STORICO ? `<button class="chip sel" data-chi="${STORICO}">${esc(r.clientiStorico)}</button>` : ""}
           <button class="chip me ${r.clienteId === IO ? "sel" : ""}" data-chi="${IO}">🙋‍♀️ Per me</button>
+          ${ord.daScorta ? "" : `<button class="chip scorta ${r.clienteId === SCORTA ? "sel" : ""}" data-chi="${SCORTA}">📦 Da rivendere</button>`}
           ${filtrate.map(c => `<button class="chip ${r.clienteId === c.id ? "sel" : ""}" data-chi="${c.id}">${esc(c.nome)}</button>`).join("")}
           <button class="chip new" id="chi-nuova">➕ Nuova cliente</button>
         </div>
@@ -447,47 +513,99 @@ function apriOrdine(o) {
   }
 
   // Passo 2 — Cosa ha preso?
+  let inAttesaScorta = null;   // prodotto della scorta scelto ma non ancora aggiunto
   function passoCosa(r) {
-    const isIo = r.clienteId === IO;
-    $("#sheet-body").innerHTML = testataSheet(nomeRiga(r), true, 2) + `
+    const isIo = r.clienteId === IO, isScorta = r.clienteId === SCORTA;
+    if (isScorta && !r._tipo) r._tipo = r.articoli.some(a => a.confezione) ? "confezione" : "pezzi";
+    const isConf = isScorta && r._tipo === "confezione";
+    const inAttesaConf = !!inAttesaScorta?.confezione;
+    const inv = isScorta ? [] : inventarioScorta([...ordini.filter(x => x.id !== o?.id), { ...ordinePronto(), id: o?.id || "nuovo" }]).filter(v => v.rimasti > 0);
+    $("#sheet-body").innerHTML = testataSheet(nomeRiga(r), true, isScorta ? 0 : 2) + `
       <div class="sh-main">
-        <div class="question">${isIo ? "Cosa hai preso per te?" : `Cosa ha preso ${esc(primoNome({ nome: nomeRiga(r) }))}?`}</div>
-        <p class="q-hint">Scrivi un prodotto alla volta con il suo prezzo.</p>
-        <div class="items">${r.articoli.map((a, i) => `<div class="item"><div class="i-name">${esc(a.nome)}</div>
-            <b class="num">${euro(a.prezzo)}</b><button class="x" data-xart="${i}" aria-label="Togli">×</button></div>`).join("")}</div>
+        <div class="question">${isIo ? "Cosa hai preso per te?" : isScorta ? "Cosa hai comprato da rivendere?" : `Cosa ha preso ${esc(primoNome({ nome: nomeRiga(r) }))}?`}</div>
+        ${!nuovaRiga ? `<button class="pill c-blue" id="cambia-chi" style="margin:0 0 10px">👤 ${esc(nomeRiga(r))} · Cambia</button>` : ""}
+        ${isScorta ? `<div class="segmented" style="margin:4px 0 12px"><button data-tipo="pezzi" class="${!isConf ? "on" : ""}">📦 Prodotti uguali</button>
+          <button data-tipo="confezione" class="${isConf ? "on" : ""}">🎄 Calendario o cofanetto</button></div>` : ""}
+        <p class="q-hint">${isConf ? "Scrivi il nome e quanto valgono a catalogo i prodotti dentro (di solito è scritto sul catalogo o sulla scatola). Poi venderai i prodotti uno per uno." :
+          isScorta ? "Scrivi i prodotti del bundle, il prezzo di catalogo e quanti pezzi. Non sono spese: li ritrovi nella scorta quando li vendi." : "Scrivi un prodotto alla volta con il suo prezzo."}</p>
+        <div class="items">${r.articoli.map((a, i) => `<div class="item"><div class="i-name">${a.confezione ? "🎄 " : ""}${a.fonte === "scorta" ? `<span class="tag-scorta">${a.da ? `🎄 ${esc(a.da)}` : "📦 scorta"}</span> ` : ""}${esc(nomeArt(a))}${a.confezione ? ` <span class="muted" style="font-size:14px">(valore prodotti)</span>` : ""}</div>
+            <b class="num">${euro((Number(a.prezzo) || 0) * qta(a))}</b><button class="x" data-xart="${i}" aria-label="Togli">×</button></div>`).join("")}</div>
+        ${inv.length ? `<div class="scorta-box"><div class="gift-sub" style="margin-top:0">📦 Dalla tua scorta</div>
+          <div class="chips small-chips">${inv.map(v => v.tipo === "confezione"
+            ? `<button class="chip scorta ${inAttesaScorta?.confezione && chiave(inAttesaScorta.confezione) === chiave(v.nome) ? "sel" : ""}" data-conf="${esc(v.nome)}">🎄 ${esc(v.nome)} <span class="muted">· ancora ${euro(v.valoreResiduo)}</span></button>`
+            : `<button class="chip scorta ${inAttesaScorta && !inAttesaScorta.confezione && chiave(inAttesaScorta.nome) === chiave(v.nome) ? "sel" : ""}" data-scorta="${esc(v.nome)}">${esc(v.nome)} <span class="muted">· ${v.rimasti} ${v.rimasti === 1 ? "rimasto" : "rimasti"}</span></button>`).join("")}</div></div>` : ""}
         <div class="add-box">
-          <input id="art-nome" list="dl-prodotti" placeholder="Nome del prodotto" autocomplete="off">
-          <div class="two"><input id="art-prezzo" inputmode="decimal" placeholder="Prezzo €" autocomplete="off">
-            <button class="c-blue" id="art-add">＋ Aggiungi</button></div>
+          ${inAttesaScorta ? `<div class="tag-scorta big-tag">${inAttesaConf ? `🎄 Dal ${esc(inAttesaScorta.confezione)}` : "📦 Preso dalla scorta"} <button class="x-mini" id="annulla-scorta" aria-label="Non dalla scorta">×</button></div>` : ""}
+          <input id="art-nome" list="dl-prodotti" placeholder="${inAttesaConf ? "Quale prodotto? Es. siero" : isConf ? "Es. Calendario dell'avvento" : "Nome del prodotto"}" autocomplete="off" value="${esc(inAttesaConf ? "" : inAttesaScorta?.nome || "")}">
+          <div class="two"><input id="art-prezzo" inputmode="decimal" placeholder="${isConf ? "Valore prodotti €" : isScorta ? "Prezzo a pezzo €" : "Prezzo €"}" autocomplete="off" value="${esc(inAttesaScorta && !inAttesaConf ? inIt(inAttesaScorta.prezzo) : "")}">
+            ${isScorta ? `<input id="art-qta" inputmode="numeric" placeholder="Pezzi" value="1" aria-label="Quanti pezzi">` : `<button class="c-blue" id="art-add">＋ Aggiungi</button>`}</div>
+          ${isScorta ? `<button class="c-blue" id="art-add">＋ Aggiungi</button>` : ""}
+          ${inAttesaScorta ? `<div class="hint" style="margin:0">${inAttesaConf ? "Scrivi il prodotto e il prezzo a cui lo vendi: il costo lo calcolo io." : "Scrivi il prezzo a cui lo vendi."}</div>` : ""}
         </div>
         <div class="total-line"><span>Totale</span><b class="num">${euro(totaleRiga(r))}</b></div>
         <details class="more" ${r.sconto ? "open" : ""}><summary>Hai fatto uno sconto?</summary>
           <label>Sconto in euro</label><input id="art-sconto" inputmode="decimal" placeholder="0" value="${esc(inIt(r.sconto || ""))}">
         </details>
+        ${!nuovaRiga ? `<button class="danger" id="rimuovi-cosa" style="width:100%;margin-top:14px">Togli dall'ordine</button>` : ""}
       </div>
-      <div class="sh-foot"><button class="big primary" id="avanti">Avanti →</button></div>`;
+      <div class="sh-foot"><button class="big primary" id="avanti">${isScorta ? "✓ Fatto" : "Avanti →"}</button></div>`;
+    const ridisegna = () => { passoCosa(r); $("#sh-back").addEventListener("click", indietro); };
     const nomeIn = $("#art-nome"), prezzoIn = $("#art-prezzo");
     const suggerisciPrezzo = () => { const p = catalogo.find(x => chiave(x.nome) === chiave(nomeIn.value)); if (p?.prezzo && !prezzoIn.value) prezzoIn.value = inIt(p.prezzo); };
     nomeIn.addEventListener("change", suggerisciPrezzo);
-    nomeIn.addEventListener("input", suggerisciPrezzo);
+    nomeIn.addEventListener("input", () => {
+      if (inAttesaScorta && !inAttesaScorta.confezione && chiave(nomeIn.value) !== chiave(inAttesaScorta.nome)) { inAttesaScorta = null; $(".big-tag")?.remove(); }
+      suggerisciPrezzo();
+    });
     const aggiungi = () => {
       const nome = nomeIn.value.trim();
       if (!nome) { nomeIn.focus(); return false; }
       const prezzo = numIt(prezzoIn.value);
-      r.articoli.push({ nome, prezzo }); segna();
-      if (prezzo) nuoviPrezzi.push({ nome, prezzo });
+      const pezzi = isScorta ? Math.max(1, parseInt($("#art-qta").value) || 1) : 1;
+      const art = { nome, prezzo, qta: pezzi };
+      if (isConf) art.confezione = true;
+      if (inAttesaScorta?.confezione) {
+        art.fonte = "scorta"; art.da = inAttesaScorta.confezione; art.costo = costoDaConfezione(inv, inAttesaScorta.confezione, prezzo);
+        if (art.costo === null) avviso("Ricordati di scrivere quanto hai pagato la confezione: il guadagno si aggiorna da solo");
+      } else if (inAttesaScorta) {
+        const v = inv.find(x => chiave(x.nome) === chiave(inAttesaScorta.nome));
+        art.fonte = "scorta"; art.costo = v && v.costoNoto ? v.costoPezzo : null;
+        if (v && !v.costoNoto) avviso("Ricordati di scrivere quanto hai pagato il bundle: il guadagno si aggiorna da solo");
+      } else if (prezzo && !isConf) nuoviPrezzi.push({ nome, prezzo });
+      const uguale = r.articoli.find(x => chiave(x.nome) === chiave(art.nome) && (x.fonte || "") === (art.fonte || "") && (x.da || "") === (art.da || "") && !!x.confezione === !!art.confezione && Number(x.prezzo) === art.prezzo && x.costo === art.costo);
+      if (uguale) uguale.qta = qta(uguale) + art.qta; else r.articoli.push(art);
+      inAttesaScorta = null; segna();
       return true;
     };
-    $("#art-add").addEventListener("click", () => { if (aggiungi()) { passoCosa(r); $("#sh-back").addEventListener("click", indietro); $("#art-nome").focus(); } });
+    $("#art-add").addEventListener("click", () => { if (aggiungi()) { ridisegna(); $("#art-nome").focus(); } });
     prezzoIn.addEventListener("keydown", (e) => { if (e.key === "Enter") $("#art-add").click(); });
     nomeIn.addEventListener("keydown", (e) => { if (e.key === "Enter") prezzoIn.focus(); });
-    $$("[data-xart]").forEach(b => b.addEventListener("click", () => { r.articoli.splice(+b.dataset.xart, 1); segna(); passoCosa(r); $("#sh-back").addEventListener("click", indietro); }));
+    $$("[data-scorta]").forEach(b => b.addEventListener("click", () => {
+      const v = inv.find(x => chiave(x.nome) === chiave(b.dataset.scorta));
+      inAttesaScorta = { nome: v.nome, prezzo: v.prezzo }; ridisegna(); $("#art-prezzo").focus(); $("#art-prezzo").select();
+    }));
+    $("#annulla-scorta")?.addEventListener("click", () => { inAttesaScorta = null; ridisegna(); });
+    $$("[data-conf]").forEach(b => b.addEventListener("click", () => { inAttesaScorta = { confezione: b.dataset.conf }; ridisegna(); $("#art-nome").focus(); }));
+    $$("[data-tipo]").forEach(b => b.addEventListener("click", () => { r._tipo = b.dataset.tipo; ridisegna(); }));
+    $$("[data-xart]").forEach(b => b.addEventListener("click", () => { r.articoli.splice(+b.dataset.xart, 1); segna(); ridisegna(); }));
     $("#art-sconto").addEventListener("input", (e) => { r.sconto = numIt(e.target.value); segna(); $(".total-line b").textContent = euro(totaleRiga(r)); });
     $("#avanti").addEventListener("click", () => {
       if (nomeIn.value.trim()) aggiungi();   // prodotto scritto ma non aggiunto: lo aggiungo io
       if (!r.articoli.length) { nomeIn.focus(); avviso("Aggiungi almeno un prodotto"); return; }
-      passo = "stato"; disegna();
+      if (isScorta) { r.pagato = true; r.consegnato = true; nuovaRiga = false; passo = "panoramica"; }
+      else passo = "stato";
+      disegna();
     });
+    $("#rimuovi-cosa")?.addEventListener("click", rimuoviRiga);
+    $("#cambia-chi")?.addEventListener("click", () => { cercaChi = ""; passo = "chi"; disegna(); });
+  }
+
+  function rimuoviRiga() {
+    if (!confirm("Togliere dall'ordine?")) return;
+    ord.righe.splice(idx, 1); segna(); nuovaRiga = false;
+    if (!ord.righe.length && !o) return chiudiSheet(true);
+    if (!ord.righe.length) { ord.righe.push(rigaVuota()); idx = 0; nuovaRiga = true; passo = "chi"; return disegna(); }
+    passo = "panoramica"; disegna();
   }
 
   // Passo 3 — Pagato? Consegnato?
@@ -502,11 +620,9 @@ function apriOrdine(o) {
         <p class="q-hint">Totale ${euro(totaleRiga(r))}</p>
         ${isIo ? "" : yn("pagato", "💶 Ha già pagato?")}
         ${yn("consegnato", isIo ? "📦 Ce l'hai già?" : "📦 Le hai già consegnato i prodotti?")}
-        ${isIo ? "" : `<div class="yesno"><div class="yn-q">🎁 Le hai dato un omaggio?</div>
-          <div class="items">${r.omaggiDati.map((x, i) => `<div class="item"><div class="i-name">${x.qta > 1 ? x.qta + " × " : ""}${esc(x.nome)}</div>
-            <button class="x" data-xom="${i}">×</button></div>`).join("")}</div>
-          <div class="add-box" style="box-shadow:none;padding:0"><div class="two"><input id="om-nome" list="dl-omaggi" placeholder="Es. campioncino" autocomplete="off">
-            <button class="c-gold" id="om-add">＋ Aggiungi</button></div></div></div>
+        ${isIo ? "" : `<div class="yesno"><div class="yn-q">🎁 Le hai regalato qualcosa?</div>
+          <div class="hint" style="margin:-4px 0 10px">Tocca un omaggio che hai: si scala da solo dal totale.</div>
+          ${editorOmaggi(r.omaggiDati, "od", giacenzaAttuale().filter(v => v.giacenza > 0).map(v => ({ nome: v.nome, giacenza: v.giacenza })), "Altro omaggio")}</div>
         <div class="yesno"><div class="yn-q">⏰ Ricordami di risentirla</div><div class="chips">
           ${[["", "No"], ["30", "Tra 1 mese"], ["60", "Tra 2 mesi"], ["90", "Tra 3 mesi"]].map(([v, t]) =>
             `<button class="chip ${String(r.riacquistoGiorni || "") === v ? "sel" : ""}" data-ric="${v}">${t}</button>`).join("")}</div>
@@ -517,59 +633,44 @@ function apriOrdine(o) {
     const ridisegna = () => { passoStato(r); $("#sh-back").addEventListener("click", indietro); };
     $$("[data-yn]").forEach(b => b.addEventListener("click", () => { r[b.dataset.yn] = b.dataset.v === "1"; segna(); ridisegna(); }));
     $$("[data-ric]").forEach(b => b.addEventListener("click", () => { r.riacquistoGiorni = b.dataset.ric ? Number(b.dataset.ric) : null; segna(); ridisegna(); }));
-    $$("[data-xom]").forEach(b => b.addEventListener("click", () => { r.omaggiDati.splice(+b.dataset.xom, 1); segna(); ridisegna(); }));
-    $("#om-add")?.addEventListener("click", () => {
-      const nome = $("#om-nome").value.trim(); if (!nome) return $("#om-nome").focus();
-      const e = r.omaggiDati.find(x => chiave(x.nome) === chiave(nome)); if (e) e.qta++; else r.omaggiDati.push({ nome, qta: 1 });
-      segna(); ridisegna();
-    });
-    $("#rimuovi").addEventListener("click", () => {
-      if (!confirm("Togliere dall'ordine?")) return;
-      ord.righe.splice(idx, 1); segna(); nuovaRiga = false;
-      if (!ord.righe.length && !o) return chiudiSheet(true);
-      passo = "panoramica"; disegna();
-    });
+    if (!isIo) collegaOmaggi(r.omaggiDati, "od", ridisegna);
+    $("#rimuovi").addEventListener("click", rimuoviRiga);
     $("#fatto").addEventListener("click", () => { nuovaRiga = false; passo = "panoramica"; disegna(); });
   }
 
   // Riepilogo dell'ordine
   function passoPanoramica() {
     const pronte = ord.righe.map(rigaPronta);
-    const c = calcolaOrdine({ ...ord, righe: pronte, costo: numIt(ord.costo) });
-    const haCosto = numIt(ord.costo) > 0;
+    const c = calcolaOrdine(ordinePronto());
+    const haCosto = numIt(ord.costo) > 0 || c.tuttoDaScorta;
     $("#sheet-body").innerHTML = testataSheet(o ? `Ordine del ${dataLunga(ord.data)}` : "Nuovo ordine", false) + `
       <div class="sh-main">
         <div class="question">${plurale(pronte.length, "persona", "persone")} in quest'ordine</div>
         <p class="q-hint">Tocca una scheda per cambiarla.</p>
-        ${pronte.map((r, i) => `<div class="card tap ${r.clienteId === IO ? "b-pink" : "b-blue"}" data-riga="${i}">
-          <div class="row"><div class="who">${avatar(nomeRiga(r), r.clienteId === IO)}<div><h3>${esc(nomeRiga(r))}</h3>
+        ${pronte.map((r, i) => `<div class="card tap ${r.clienteId === IO ? "b-pink" : r.clienteId === SCORTA ? "b-orange" : "b-blue"}" data-riga="${i}">
+          <div class="row"><div class="who">${avatarRiga(r)}<div><h3>${esc(nomeRiga(r))}</h3>
             <div class="sub">${esc(r.prodotti)}</div></div></div><div class="amount num">${euro(r.importo)}</div></div>
+          ${r.clienteId === SCORTA ? `<span class="badge c-orange">💰 soldi anticipati, non spese</span>` : `
           ${r.clienteId === IO ? "" : `<span class="badge ${r.pagato ? "c-green" : "c-pink"}">${r.pagato ? "✓ Pagato" : "💶 Da pagare"}</span>`}
-          <span class="badge ${r.consegnato ? "c-green" : "c-orange"}">${r.consegnato ? "✓ Consegnato" : "📦 Da consegnare"}</span>
+          <span class="badge ${r.consegnato ? "c-green" : "c-orange"}">${r.consegnato ? "✓ Consegnato" : "📦 Da consegnare"}</span>`}
           ${r.omaggiDati?.length ? `<span class="badge c-gold">🎁 ${r.omaggiDati.reduce((s, x) => s + x.qta, 0)}</span>` : ""}
         </div>`).join("")}
         <button class="big c-blue" id="add-cliente">＋ Aggiungi un'altra persona</button>
 
-        <div class="yesno" style="margin-top:20px"><div class="yn-q">🧾 Quanto hai pagato a Yves Rocher?</div>
-          <input id="costo" class="money" inputmode="decimal" placeholder="0,00 €" value="${esc(inIt(ord.costo))}">
-          <div class="hint">Il totale dell'ordine che hai fatto all'azienda. Puoi metterlo anche dopo.</div></div>
+        ${sezioneCosto(c)}
 
-        <div class="result ${haCosto ? (c.guadagnoAtteso >= 0 ? "c-green" : "c-pink") : "c-gold"}" id="risultato">${risultatoHtml(c, haCosto)}</div>
+        <div class="result ${haCosto ? (c.guadagnoAtteso >= 0 ? "c-green" : "c-pink") : "c-gold"}" id="risultato">${risultatoHtml(c, haCosto, ord.daScorta)}</div>
 
-        <details class="more"><summary>🎁 Omaggi arrivati con l'ordine${ord.omaggiRicevuti.length ? ` (${ord.omaggiRicevuti.reduce((s, x) => s + x.qta, 0)})` : ""}</summary>
-          ${ord.omaggiNote ? `<div class="hint">Dal vecchio file: ${esc(ord.omaggiNote)}</div>` : ""}
-          <div class="items">${ord.omaggiRicevuti.map((x, i) => `<div class="item"><div class="i-name">${esc(x.nome)}</div>
-            <input class="qta-in" data-qric="${i}" inputmode="numeric" value="${x.qta}" style="width:70px;text-align:center;padding:8px">
-            <button class="x" data-xric="${i}">×</button></div>`).join("")}</div>
-          <div class="two" style="display:grid;grid-template-columns:1fr 110px;gap:8px"><input id="ric-nome" list="dl-omaggi" placeholder="Es. campioncini" autocomplete="off">
-            <button class="c-gold" id="ric-add">＋ Aggiungi</button></div>
-        </details>
+        ${riquadroOmaggi()}
 
         <details class="more"><summary>⚙️ Altro (data, note…)</summary>
           <label>Data dell'ordine</label><input type="date" id="data" value="${esc(ord.data)}">
           ${c.valoreIo > 0 ? `<label>Quanto hai pagato davvero i tuoi prodotti? (facoltativo)</label>
             <input id="costoio" inputmode="decimal" placeholder="${inIt(c.quotaIo.toFixed(2))} (calcolato da solo)" value="${esc(inIt(ord.costoIoManuale))}">
             <div class="hint">Lascia vuoto e l'app lo calcola in proporzione.</div>` : ""}
+          ${c.valoreScorta > 0 ? `<label>Quanto hai pagato davvero i prodotti da rivendere? (facoltativo)</label>
+            <input id="costoscorta" inputmode="decimal" placeholder="${inIt(c.quotaScorta.toFixed(2))} (calcolato da solo)" value="${esc(inIt(ord.costoScortaManuale))}">
+            <div class="hint">Utile se il bundle aveva uno sconto speciale.</div>` : ""}
           <label>Note</label><textarea id="note">${esc(ord.note)}</textarea>
           ${o ? `<button class="danger" id="elimina" style="width:100%;margin-top:12px">🗑 Elimina questo ordine</button>` : ""}
         </details>
@@ -577,25 +678,21 @@ function apriOrdine(o) {
       <div class="sh-foot"><button class="big primary" id="salva">✓ Salva ordine</button></div>`;
 
     const aggiornaRisultato = () => {
-      const cc = calcolaOrdine({ ...ord, righe: ord.righe.map(rigaPronta), costo: numIt(ord.costo),
-        costoIoManuale: ord.costoIoManuale === "" || ord.costoIoManuale == null ? null : numIt(ord.costoIoManuale) });
-      const hc = numIt(ord.costo) > 0;
+      const cc = calcolaOrdine(ordinePronto());
+      const hc = numIt(ord.costo) > 0 || cc.tuttoDaScorta;
       const box = $("#risultato");
       box.className = "result " + (hc ? (cc.guadagnoAtteso >= 0 ? "c-green" : "c-pink") : "c-gold");
-      box.innerHTML = risultatoHtml(cc, hc);
+      box.innerHTML = risultatoHtml(cc, hc, ord.daScorta);
     };
     $$("[data-riga]").forEach(el => el.addEventListener("click", () => { idx = +el.dataset.riga; passo = "cosa"; disegna(); }));
     $("#add-cliente").addEventListener("click", () => { ord.righe.push(rigaVuota()); idx = ord.righe.length - 1; nuovaRiga = true; cercaChi = ""; passo = "chi"; disegna(); });
-    $("#costo").addEventListener("input", (e) => { ord.costo = e.target.value; segna(); aggiornaRisultato(); });
+    $("#costo")?.addEventListener("input", (e) => { ord.costo = e.target.value; segna(); aggiornaRisultato(); });
     $("#costoio")?.addEventListener("input", (e) => { ord.costoIoManuale = e.target.value; segna(); aggiornaRisultato(); });
+    $("#costoscorta")?.addEventListener("input", (e) => { ord.costoScortaManuale = e.target.value; segna(); aggiornaRisultato(); });
     $("#data").addEventListener("change", (e) => { ord.data = e.target.value; segna(); });
     $("#note").addEventListener("input", (e) => { ord.note = e.target.value; segna(); });
-    $$("[data-qric]").forEach(i => i.addEventListener("input", () => { ord.omaggiRicevuti[+i.dataset.qric].qta = Math.max(1, parseInt(i.value) || 1); segna(); }));
-    $$("[data-xric]").forEach(b => b.addEventListener("click", () => { ord.omaggiRicevuti.splice(+b.dataset.xric, 1); segna(); passoPanoramica(); $("#sh-back").addEventListener("click", indietro); $$("details.more")[0].open = true; }));
-    $("#ric-add").addEventListener("click", () => {
-      const nome = $("#ric-nome").value.trim(); if (!nome) return $("#ric-nome").focus();
-      const e = ord.omaggiRicevuti.find(x => chiave(x.nome) === chiave(nome)); if (e) e.qta++; else ord.omaggiRicevuti.push({ nome, qta: 1 });
-      segna(); passoPanoramica(); $("#sh-back").addEventListener("click", indietro); $$("details.more")[0].open = true;
+    collegaOmaggi(ord.omaggiRicevuti, "or", () => {
+      const y = $(".sh-main").scrollTop; passoPanoramica(); $("#sh-back").addEventListener("click", indietro); $(".sh-main").scrollTop = y;
     });
     $("#elimina")?.addEventListener("click", async () => {
       if (!confirm("Eliminare questo ordine?")) return;
@@ -609,12 +706,12 @@ function apriOrdine(o) {
   async function salva() {
     const righe = ord.righe.filter(r => r.clienteId && r.articoli.length).map(r => {
       const p = rigaPronta(r);
-      return { ...p, pagato: p.clienteId === IO ? true : !!p.pagato, consegnato: !!p.consegnato, riacquistoGiorni: p.riacquistoGiorni || null };
+      return { ...p, pagato: isSpeciale(p.clienteId) ? true : !!p.pagato, consegnato: p.clienteId === SCORTA ? true : !!p.consegnato, riacquistoGiorni: p.riacquistoGiorni || null };
     });
     if (!righe.length) return avviso("Aggiungi almeno una persona con dei prodotti");
     const { id, ...resto } = ord;
     const dati = { ...resto, righe, costo: numIt(ord.costo),
-      costoIoManuale: ord.costoIoManuale === "" || ord.costoIoManuale == null ? null : numIt(ord.costoIoManuale), aggiornato: serverTimestamp() };
+      costoIoManuale: manuale(ord.costoIoManuale), costoScortaManuale: manuale(ord.costoScortaManuale), daScorta: !!ord.daScorta, aggiornato: serverTimestamp() };
     $("#salva").disabled = true;
     if (o) await setDoc(doc(col("ordini"), o.id), dati); else await addDoc(col("ordini"), dati);
     for (const p of nuoviPrezzi) setDoc(doc(col("catalogo"), slug(p.nome)), { nome: p.nome, prezzo: p.prezzo, ultimoUso: oggi() }, { merge: true });
@@ -627,10 +724,12 @@ function apriOrdine(o) {
 
 const rigaVuota = () => ({ id: nuovoId(), clienteId: "", articoli: [], sconto: 0, omaggiDati: [], pagato: false, consegnato: false, riacquistoGiorni: null });
 
-function risultatoHtml(c, haCosto) {
-  if (!haCosto) return `<div class="r-lbl">🌿 Il tuo guadagno</div><div class="r-sub" style="margin-top:6px">Scrivi quanto hai pagato a Yves Rocher e lo calcolo io.</div>`;
+function risultatoHtml(c, haCosto, daScorta) {
+  if (!haCosto) return `<div class="r-lbl">🌿 Il tuo guadagno</div><div class="r-sub" style="margin-top:6px">${daScorta ? "Scrivi quanto ti erano costati i prodotti" : "Scrivi quanto hai pagato a Yves Rocher"} e lo calcolo io.</div>`;
+  if (c.venditaClienti === 0 && c.valoreIo === 0 && c.quotaScorta > 0) return `<div class="r-lbl">📦 Soldi messi in scorta</div><div class="r-val num">${euro(c.quotaScorta)}</div>
+    <div class="r-sub">Non sono spese: li recuperi quando rivendi questi prodotti.</div>`;
   return `<div class="r-lbl">🌿 Ti resta in tasca</div><div class="r-val num">${euro(c.guadagnoAtteso)}</div>
-    <div class="r-sub">Venduto ${euro(c.venditaClienti)} · costo ${euro(c.costoClienti)}${c.valoreIo > 0 ? ` · per te ${euro(c.quotaIo)}` : ""}</div>
+    <div class="r-sub">Venduto ${euro(c.venditaClienti)} · costo ${euro(c.costoClienti)}${daScorta || c.usatoScorta > 0 ? ` (di cui ${euro(c.usatoScorta)} dalla scorta)` : ""}${c.valoreIo > 0 ? ` · per te ${euro(c.quotaIo)}` : ""}${c.quotaScorta > 0 ? ` · in scorta ${euro(c.quotaScorta)}` : ""}</div>
     ${c.daIncassare > 0 ? `<div class="r-sub">di cui ancora da incassare ${euro(c.daIncassare)}</div>` : ""}`;
 }
 
@@ -718,22 +817,123 @@ function apriCliente(c) {
 // ---------- OMAGGI ----------
 function renderOmaggi() {
   const g = giacenzaOmaggi(ordini, movimenti);
-  let h = `<p class="section-hint" style="margin-top:0">Quanti omaggi e campioncini ti restano. Si aggiornano da soli con gli ordini; usa ＋ e − per quelli arrivati o dati fuori dagli ordini.</p>`;
-  if (!g.length) h += `<div class="empty"><div class="e-ico">🎁</div><b>Nessun omaggio</b><br>Aggiungili negli ordini oppure con “Nuovo omaggio”.</div>`;
-  for (const v of g) {
-    h += `<div class="card b-gold"><div class="gift">
-      <div class="g-n"><h3>${esc(v.nome)}</h3><div class="sub">arrivati ${v.ricevuti + Math.max(0, v.rettifiche)} · dati ${v.dati + Math.max(0, -v.rettifiche)}</div></div>
-      <div class="g-q" style="color:${v.giacenza < 0 ? "var(--red)" : "var(--gold)"}">${v.giacenza}</div>
-      <div class="g-b"><button class="c-pink" data-mov="${esc(v.nome)}" data-q="-1" aria-label="Uno in meno">−</button>
-        <button class="c-green" data-mov="${esc(v.nome)}" data-q="1" aria-label="Uno in più">＋</button></div>
-    </div></div>`;
+  const restano = g.reduce((s, v) => s + Math.max(0, v.giacenza), 0);
+  const arrivati = g.reduce((s, v) => s + v.ricevuti + Math.max(0, v.rettifiche), 0);
+  const regalati = g.reduce((s, v) => s + v.dati + Math.max(0, -v.rettifiche), 0);
+  const nomiOrdine = (o) => [...new Set((o.righe || []).filter(r => r.clienteId !== SCORTA).map(nomeRiga))].join(", ");
+  const listaOm = (arr) => arr.map(x => `<span class="gift-pill">${x.qta > 1 ? `<b>${x.qta}×</b> ` : ""}${esc(x.nome)}</span>`).join("");
+
+  const daConvertire = ordini.filter(o => o.omaggiNote && !(o.omaggiRicevuti || []).length && parseOmaggi(o.omaggiNote).length);
+  let h = daConvertire.length ? `<div class="card b-gold" style="background:var(--gold-soft)">
+      <h3>📝 Omaggi del vecchio file</h3>
+      <div class="sub" style="color:var(--text)">In ${plurale(daConvertire.length, "ordine", "ordini")} gli omaggi sono solo scritti come testo e non vengono contati.</div>
+      <div class="actions"><button class="primary" id="converti-omaggi">✨ Trasformali in omaggi veri</button></div></div>` : "";
+  h += `<div class="tiles tiles3">
+      <div class="tile c-gold"><div class="t-ico">🎁</div><div class="t-val">${restano}</div><div class="t-lbl">ti restano</div></div>
+      <div class="tile c-green"><div class="t-ico">📥</div><div class="t-val">${arrivati}</div><div class="t-lbl">arrivati</div></div>
+      <div class="tile c-pink"><div class="t-ico">🤝</div><div class="t-val">${regalati}</div><div class="t-lbl">regalati</div></div>
+    </div>
+    <div class="segmented"><button data-vo="ordini" class="${vistaOmaggi === "ordini" ? "on" : ""}">🛍️ Per ordine</button>
+      <button data-vo="omaggi" class="${vistaOmaggi === "omaggi" ? "on" : ""}">🎁 Per omaggio</button></div>`;
+
+  if (vistaOmaggi === "ordini") {
+    const conOmaggi = ordini.filter(o => { const x = omaggiOrdine(o); return x.nArrivati || x.nRegalati || o.omaggiNote || (o.righe || []).some(r => r.omaggio); });
+    if (!conOmaggi.length && !movimenti.length) h += vuotoOmaggi();
+    for (const o of conOmaggi) {
+      const x = omaggiOrdine(o);
+      const vecchiRegali = (o.righe || []).filter(r => r.omaggio);
+      h += `<div class="card b-gold tap" data-ordine="${o.id}">
+        <div class="row"><div><h3>Ordine del ${dataLunga(o.data)}</h3><div class="sub">${esc(nomiOrdine(o))}</div></div><span class="muted" style="font-size:22px">›</span></div>
+        ${x.nArrivati || !o.omaggiNote ? `<div class="gift-sub">📥 Arrivati</div>
+        <div>${x.arrivati.length ? listaOm(x.arrivati) : `<span class="muted" style="font-size:15px">nessuno segnato</span>`}</div>` : ""}
+        ${o.omaggiNote ? `<div class="hint">📝 Dal vecchio file: ${esc(o.omaggiNote)}</div>` : ""}
+        ${x.regalati.length || x.nArrivati ? `<div class="gift-sub">🤝 Regalati</div>
+        ${x.regalati.length ? x.regalati.map(gr => `<div class="regalo-riga">${avatarMini(gr.riga)}<b>${esc(nomeRiga(gr.riga))}</b> ${listaOm(gr.omaggi)}</div>`).join("")
+          : `<span class="muted" style="font-size:15px">nessuno</span>`}` : ""}
+        ${vecchiRegali.map(r => `<div class="hint">📝 ${esc(nomeRiga(r))}: ${esc(r.omaggio)}</div>`).join("")}
+      </div>`;
+    }
+    if (movimenti.length) {
+      h += `<div class="section"><h2>✋ Fuori dagli ordini</h2></div><div class="card">
+        ${[...movimenti].sort((a, b) => (b.data || "").localeCompare(a.data || "")).map(m => `<div class="money-row">
+          <span>${dataLunga(m.data)} · ${esc(m.nome)}</span>
+          <span><b class="num" style="color:${m.qta > 0 ? "var(--green)" : "var(--pink)"}">${m.qta > 0 ? "+" : ""}${m.qta}</b>
+          <button class="x-mini" data-delmov="${m.id}" aria-label="Elimina">×</button></span></div>`).join("")}
+      </div>`;
+    }
+  } else {
+    if (!g.length) h += vuotoOmaggi();
+    for (const v of g) {
+      h += `<div class="card b-gold"><div class="gift">
+        <div class="g-n"><h3>${esc(v.nome)}</h3><div class="sub">📥 ${v.ricevuti + Math.max(0, v.rettifiche)} · 🤝 ${v.dati + Math.max(0, -v.rettifiche)}</div></div>
+        <div class="g-q" style="color:${v.giacenza < 0 ? "var(--red)" : "var(--gold)"}">${v.giacenza}</div>
+        <div class="g-b"><button class="c-pink" data-mov="${esc(v.nome)}" data-q="-1" aria-label="Uno in meno">−</button>
+          <button class="c-green" data-mov="${esc(v.nome)}" data-q="1" aria-label="Uno in più">＋</button></div>
+      </div>
+      ${v.giacenza < 0 ? `<div class="hint" style="color:var(--red)">Ne risultano regalati più di quelli arrivati: forse manca un arrivo in un ordine.</div>` : ""}
+      <details class="storia"><summary>Da dove arrivano e a chi sono andati</summary>
+        ${v.eventi.map(e => evento(e)).join("")}
+      </details></div>`;
+    }
   }
   $("#view").innerHTML = h;
+  $$("[data-vo]").forEach(b => b.addEventListener("click", () => { vistaOmaggi = b.dataset.vo; renderOmaggi(); }));
+  $("#converti-omaggi")?.addEventListener("click", () => apriConversioneOmaggi(daConvertire));
+  $$("[data-ordine]").forEach(el => el.addEventListener("click", () => apriOrdine(ordini.find(o => o.id === el.dataset.ordine))));
   $$("[data-mov]").forEach(b => b.addEventListener("click", async () => {
     const ref = await addDoc(col("movimentiOmaggi"), { nome: b.dataset.mov, qta: Number(b.dataset.q), data: oggi(), nota: "" });
     avviso(`🎁 ${b.dataset.mov}: ${b.dataset.q > 0 ? "uno in più" : "uno in meno"}`, () => deleteDoc(ref));
   }));
+  $$("[data-delmov]").forEach(b => b.addEventListener("click", async () => {
+    const m = movimenti.find(x => x.id === b.dataset.delmov); const { id, ...copia } = m;
+    await deleteDoc(doc(col("movimentiOmaggi"), id));
+    avviso("Tolto", () => setDoc(doc(col("movimentiOmaggi"), id), copia));
+  }));
 }
+
+// Trasforma il testo degli omaggi importati dal vecchio Excel in omaggi contati
+function apriConversioneOmaggi(lista) {
+  sheetChiudi = null;
+  const proposte = lista.map(o => ({ o, omaggi: parseOmaggi(o.omaggiNote) }));
+  const tot = proposte.reduce((s, p) => s + p.omaggi.reduce((t, x) => t + x.qta, 0), 0);
+  $("#sheet-body").innerHTML = testataSheet("Omaggi del vecchio file", false) + `
+    <div class="sh-main">
+      <div class="question">Ho trovato ${tot} omaggi</div>
+      <p class="q-hint">Li segno come <b>arrivati da Yves Rocher</b> con ogni ordine. Se qualcuno l'hai poi regalato, toglilo con il − nella sezione Omaggi.</p>
+      ${proposte.map(p => `<div class="card b-gold" style="padding:12px 16px"><b>Ordine del ${dataLunga(p.o.data)}</b>
+        <div class="hint" style="margin:2px 0 8px">Scritto: “${esc(p.o.omaggiNote)}”</div>
+        <div>${p.omaggi.map(x => `<span class="gift-pill">${x.qta > 1 ? `<b>${x.qta}×</b> ` : ""}${esc(x.nome)}</span>`).join("")}</div></div>`).join("")}
+      <p class="hint">Il testo originale resta salvato. Se qualcosa non va, puoi correggerlo aprendo l'ordine.</p>
+    </div>
+    <div class="sh-foot"><button class="big primary" id="conv-ok">✨ Trasforma</button></div>`;
+  $("#sh-back").addEventListener("click", () => chiudiSheet());
+  $("#conv-ok").addEventListener("click", async () => {
+    $("#conv-ok").disabled = true;
+    const b = writeBatch(db);
+    proposte.forEach(p => b.set(doc(col("ordini"), p.o.id), { omaggiRicevuti: p.omaggi, omaggiNote: "", omaggiNoteOriginale: p.o.omaggiNote }, { merge: true }));
+    await b.commit();
+    chiudiSheet(true);
+    avviso(`🎁 ${tot} omaggi aggiunti`, async () => {
+      const u = writeBatch(db);
+      proposte.forEach(p => u.set(doc(col("ordini"), p.o.id), { omaggiRicevuti: [], omaggiNote: p.o.omaggiNote }, { merge: true }));
+      await u.commit();
+    });
+  });
+  apriSheet();
+}
+
+function evento(e) {
+  const o = e.ordineId ? ordini.find(x => x.id === e.ordineId) : null;
+  const quando = dataLunga(e.data);
+  if (e.tipo === "arrivati") return `<div class="evento"><span class="ev-ico c-green">📥</span><div><b>${e.qta} arrivati</b> con l'ordine del ${quando}</div></div>`;
+  if (e.tipo === "regalati") return `<div class="evento"><span class="ev-ico c-pink">🤝</span><div><b>${e.qta} a ${esc(nomeCliente(e.clienteId))}</b> · ${quando}</div></div>`;
+  return `<div class="evento"><span class="ev-ico c-gold">✋</span><div><b>${e.qta > 0 ? "+" : ""}${e.qta} a mano</b> · ${quando}</div></div>`;
+}
+const nomeCliente = (id) => nomeRiga({ clienteId: id });
+const avatarMini = (r) => `<span class="avatar mini ${r.clienteId === IO ? "c-pink" : coloreDi(nomeRiga(r))}">${r.clienteId === IO ? "🙋‍♀️" : esc(iniziali(nomeRiga(r)))}</span>`;
+const vuotoOmaggi = () => `<div class="empty"><div class="e-ico">🎁</div><b>Nessun omaggio ancora</b><br>
+  Quando crei un ordine, nel riepilogo trovi “🎁 Omaggi di quest'ordine”: segna lì quelli arrivati.
+  Quelli che regali li segni toccando la cliente, all'ultimo passaggio.</div>`;
 
 function apriNuovoOmaggio() {
   sheetChiudi = null;
@@ -757,30 +957,60 @@ function apriNuovoOmaggio() {
 // ---------- SOLDI ----------
 function renderSoldi() {
   const nomeMese = (k) => new Date(k + "-01T00:00").toLocaleDateString("it-IT", { month: "long", year: "numeric" });
-  const sposta = (k, d) => { const [y, m] = k.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1 + d, 1)); return t.toISOString().slice(0, 7); };
-  const anno = meseSel.slice(0, 4);
-  const m = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(meseSel)));
-  const a = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(anno)));
+  const meseBreve = (k) => new Date(k + "-01T00:00").toLocaleDateString("it-IT", { month: "short", year: "2-digit" });
+  const sposta = (k, d) => { const [y, m] = k.split("-").map(Number); return new Date(Date.UTC(y, m - 1 + d, 1)).toISOString().slice(0, 7); };
   const ultimo = oggi().slice(0, 7);
+  const tot = riepilogoPeriodo(ordini);
+  const mesi = guadagnoPerMese(ordini);
+  const primo = ordini.map(o => o.data).filter(Boolean).sort()[0];
+  const m = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(meseSel)));
+  const sc = statoScorta(ordini);
+  const max = Math.max(1, ...mesi.map(x => Math.abs(x.guadagnoAtteso)));
+  const anni = [...new Set(mesi.map(x => x.mese.slice(0, 4)))];
 
   $("#view").innerHTML = `
+    <div class="big-money ${tot.guadagnoAtteso >= 0 ? "c-green" : "c-pink"}"><div style="font-weight:700">🌿 Guadagno totale</div>
+      <div class="v num">${euro(tot.guadagnoAtteso)}</div>
+      <div style="font-size:14px;opacity:.85">${primo ? `dal ${dataLunga(primo)} ${primo.slice(0, 4)} · ` : ""}${plurale(tot.ordini, "ordine", "ordini")}</div></div>
+
+    ${sc.pezzi.length ? `<div class="card b-orange"><div class="row"><div><h3>📦 La tua scorta</h3>
+        <div class="sub">${[sc.pezziRimasti ? plurale(sc.pezziRimasti, "pezzo", "pezzi") : "", sc.confezioniAperte ? plurale(sc.confezioniAperte, "confezione", "confezioni") : ""].filter(Boolean).join(" e ") || "Niente"} da rivendere</div></div>
+        <div class="amount num" style="color:var(--orange)">${euro(sc.saldo)}</div></div>
+        <div class="hint" style="margin:4px 0 8px">Soldi anticipati in prodotti: non sono spese, rientrano quando li vendi.</div>
+        ${sc.pezzi.filter(v => v.rimasti !== 0).map(v => `<div class="money-row"><span>${v.tipo === "confezione" ? "🎄 " : ""}${esc(v.nome)}${v.costoNoto ? "" : ` <span class="badge c-gold" style="margin:0">manca quanto l'hai pagato</span>`}</span>
+          <b class="num">${v.tipo === "confezione" ? `ancora ${euro(v.valoreResiduo)}` : `${v.rimasti} ${v.rimasti === 1 ? "pezzo" : "pezzi"}`}</b></div>`).join("") || `<div class="hint">Hai venduto tutto 🎉</div>`}
+      </div>` : ""}
+
+    <div class="section"><h2>📅 Mese per mese</h2></div>
+    <p class="section-hint">Tocca un mese per vedere il dettaglio.</p>
+    <div class="card" style="padding:8px 14px">
+      ${mesi.length ? mesi.map(x => `<button class="mese-riga ${x.mese === meseSel ? "sel" : ""}" data-mese="${x.mese}">
+          <span class="mr-nome">${meseBreve(x.mese)}</span>
+          <span class="mr-barra"><span class="${x.guadagnoAtteso >= 0 ? "pos" : "neg"}" style="width:${Math.max(3, Math.round(Math.abs(x.guadagnoAtteso) / max * 100))}%"></span></span>
+          <span class="mr-val num" style="color:${x.guadagnoAtteso >= 0 ? "var(--green)" : "var(--red)"}">${euro(x.guadagnoAtteso)}</span>
+        </button>`).join("") : `<div class="empty" style="padding:16px">Ancora nessun ordine.</div>`}
+    </div>
+
+    <div class="section" id="dettaglio-mese"><h2>🔍 Dettaglio</h2></div>
     <div class="month-nav"><button id="m-prev" aria-label="Mese prima">‹</button><div class="m">${nomeMese(meseSel)}</div>
       <button id="m-next" aria-label="Mese dopo" ${meseSel >= ultimo ? "disabled style='opacity:.3'" : ""}>›</button></div>
-    <div class="big-money ${m.guadagnoAtteso >= 0 ? "c-green" : "c-pink"}"><div style="font-weight:700">🌿 Ti sei messa in tasca</div>
-      <div class="v num">${euro(m.guadagnoAtteso)}</div><div style="font-size:14px;opacity:.85">${plurale(m.ordini, "ordine", "ordini")} questo mese</div></div>
+    <div class="result ${m.guadagnoAtteso >= 0 ? "c-green" : "c-pink"}" style="margin-top:0"><div class="r-lbl">🌿 Ti sei messa in tasca</div>
+      <div class="r-val num">${euro(m.guadagnoAtteso)}</div><div class="r-sub">${plurale(m.ordini, "ordine", "ordini")}</div></div>
     <div class="tiles">
       <div class="tile c-blue"><div class="t-ico">🛍️</div><div class="t-val num">${euro(m.venditaClienti)}</div><div class="t-lbl">venduto alle clienti</div></div>
       <div class="tile c-orange"><div class="t-ico">🧾</div><div class="t-val num">${euro(m.costo)}</div><div class="t-lbl">pagato a Yves Rocher</div></div>
       <div class="tile c-pink"><div class="t-ico">🙋‍♀️</div><div class="t-val num">${euro(m.quotaIo)}</div><div class="t-lbl">speso per te</div></div>
       <div class="tile c-purple"><div class="t-ico">⏳</div><div class="t-val num">${euro(m.daIncassare)}</div><div class="t-lbl">ancora da incassare</div></div>
+      ${m.quotaScorta > 0 || m.usatoScorta > 0 ? `
+      <div class="tile c-gold"><div class="t-ico">📦</div><div class="t-val num">${euro(m.quotaScorta)}</div><div class="t-lbl">messi in scorta</div></div>
+      <div class="tile c-gold"><div class="t-ico">♻️</div><div class="t-val num">${euro(m.usatoScorta)}</div><div class="t-lbl">presi dalla scorta</div></div>` : ""}
     </div>
-    <div class="section"><h2>📅 Tutto il ${anno}</h2></div>
-    <div class="card">
-      <div class="money-row"><span>Venduto alle clienti</span><b class="num">${euro(a.venditaClienti)}</b></div>
-      <div class="money-row"><span>Pagato a Yves Rocher</span><b class="num">${euro(a.costo)}</b></div>
-      <div class="money-row"><span>di cui per te</span><b class="num">${euro(a.quotaIo)}</b></div>
-      <div class="money-row"><span>🌿 Guadagno</span><b class="num" style="color:${a.guadagnoAtteso >= 0 ? "var(--green)" : "var(--red)"}">${euro(a.guadagnoAtteso)}</b></div>
-    </div>
+
+    ${anni.length ? `<div class="section"><h2>🗓️ Anno per anno</h2></div><div class="card">
+      ${anni.map(y => { const a = riepilogoPeriodo(ordini.filter(o => (o.data || "").startsWith(y)));
+        return `<div class="money-row"><span>${y} <span class="muted">· venduto ${euro(a.venditaClienti)}</span></span>
+          <b class="num" style="color:${a.guadagnoAtteso >= 0 ? "var(--green)" : "var(--red)"}">${euro(a.guadagnoAtteso)}</b></div>`; }).join("")}
+    </div>` : ""}
 
     <div class="section"><h2>⚙️ Impostazioni</h2></div>
     <div class="yesno"><div class="yn-q">💜 Avvisami delle clienti che non comprano da</div><div class="chips">
@@ -794,9 +1024,11 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v7</p>`;
-  $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
-  $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
+    <p class="versione" style="text-align:center">v12</p>`;
+  const vaiDettaglio = () => $("#dettaglio-mese").scrollIntoView({ behavior: "smooth", block: "start" });
+  $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); vaiDettaglio(); }));
+  $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); vaiDettaglio(); });
+  $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); vaiDettaglio(); } });
   $$("[data-giorni]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { giorniRicontatto: Number(b.dataset.giorni) }, { merge: true })));
   $("#b-backup").addEventListener("click", scaricaBackup);
   $("#b-export").addEventListener("click", esportaCsv);
@@ -811,12 +1043,12 @@ function esportaCsv() {
   const n = (x) => (Number(x) || 0).toFixed(2).replace(".", ",");
   const q = (s) => `"${String(s ?? "").replace(/"/g, '""')}"`;
   const listaOm = (arr) => (arr || []).map(x => `${x.qta > 1 ? x.qta + "x " : ""}${x.nome}`).join(", ");
-  const righe = [["Data ordine", "Cliente", "Prodotti", "Omaggi dati", "Importo", "Pagato", "Consegnato", "Pagato a Yves Rocher", "Spesa per me", "Guadagno ordine"].join(";")];
+  const righe = [["Data ordine", "Cliente", "Prodotti", "Omaggi dati", "Importo", "Pagato", "Consegnato", "Pagato a Yves Rocher", "Dalla scorta", "Spesa per me", "Messo in scorta", "Guadagno ordine"].join(";")];
   for (const o of [...ordini].reverse()) {
     const c = calcolaOrdine(o);
     (o.righe || []).forEach((r, i) => righe.push([dataIt(o.data), q(nomeRiga(r)), q(r.prodotti), q([listaOm(r.omaggiDati), r.omaggio].filter(Boolean).join(", ")),
       n(r.importo), r.pagato ? "sì" : "no", r.consegnato ? "sì" : "no",
-      i === 0 ? n(o.costo) : "", i === 0 ? n(c.quotaIo) : "", i === 0 ? n(c.guadagnoAtteso) : ""].join(";")));
+      i === 0 ? n(c.pagatoYR) : "", i === 0 ? n(c.usatoScorta) : "", i === 0 ? n(c.quotaIo) : "", i === 0 ? n(c.quotaScorta) : "", i === 0 ? n(c.guadagnoAtteso) : ""].join(";")));
   }
   scarica(new Blob(["﻿" + righe.join("\n")], { type: "text/csv;charset=utf-8" }), `ordini-${oggi()}.csv`);
   avviso("📊 File Excel scaricato");
