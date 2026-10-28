@@ -10,12 +10,12 @@
 <meta name="apple-mobile-web-app-title" content="Ordini">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
   <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
-    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 5</h2>
+    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 6</h2>
     <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
       (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
     <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
@@ -26,7 +26,7 @@
   <section id="login" class="screen hidden">
     <div class="login-box">
       <h1>Ordini Beauty</h1>
-      <p class="muted">Clienti, consegne e guadagni · v5</p>
+      <p class="muted">Clienti, consegne e guadagni · v6</p>
       <form id="login-form">
         <input type="email" id="login-email" placeholder="Email" required autocomplete="username">
         <input type="password" id="login-pass" placeholder="Password" required autocomplete="current-password">
@@ -61,7 +61,7 @@
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v5)</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v6)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>
@@ -78,7 +78,9 @@
       if (!document.querySelector("#login.hidden") || !document.querySelector("#app.hidden")) return;
       var motivi = [];
       if (location.protocol === "file:") motivi.push("Hai aperto il file direttamente dal computer. L'app va aperta dal suo indirizzo web (GitHub Pages).");
-      if (!window.__appAvviata) motivi.push("Il codice dell'app non è partito: spesso è firebase-config.js non compilato o con un errore di battitura.");
+      if (window.__errori.join(" ").indexOf("does not provide an export named") >= 0)
+        motivi.push("Il file app.js caricato è una versione vecchia: sostituiscilo nel repository GitHub con quello dello zip più recente.");
+      else if (!window.__appAvviata) motivi.push("Il codice dell'app non è partito: spesso è firebase-config.js non compilato o con un errore di battitura.");
       if (!navigator.onLine) motivi.push("Il dispositivo è offline: al primo avvio serve la connessione.");
       document.getElementById("diagnosi-testo").innerHTML =
         "<ul>" + motivi.map(function (m) { return "<li>" + m + "</li>"; }).join("") + "</ul>" +
@@ -87,6 +89,6 @@
       document.getElementById("diagnosi").classList.remove("hidden");
     }, 5000);
   </script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=6"></script>
 </body>
 </html>
