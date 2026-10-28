@@ -84,8 +84,9 @@ export function daRicontattare(clienti, ordini, oggi, giorniDefault = 60) {
     }
     if (!acquisti.length) continue;
     const ultimoAcquisto = acquisti.map(x => x.o.data).filter(Boolean).sort().pop();
+    if (!ultimoAcquisto) continue; // ordini senza data: non posso calcolare niente
     const contatto = c.ultimoContatto || "";
-    const riferimento = [ultimoAcquisto, contatto].sort().pop();
+    const riferimento = [ultimoAcquisto, contatto].filter(Boolean).sort().pop();
 
     // 1) promemoria di riacquisto su un prodotto (es. crema che finisce in 60 giorni)
     const scaduti = acquisti.filter(({ o, r }) => r.riacquistoGiorni && o.data)

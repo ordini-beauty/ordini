@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ordini Beauty</title>
-<meta name="theme-color" content="#2f5d3a">
+<meta name="theme-color" content="#1f8a5b">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Ordini">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
   <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
   <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
-    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 6</h2>
+    <h2 style="margin-top:0;color:#2f5d3a">Ordini Beauty · versione 7</h2>
     <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
       (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
     <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
@@ -25,43 +25,49 @@
   <!-- Login -->
   <section id="login" class="screen hidden">
     <div class="login-box">
+      <div class="login-logo">🌿</div>
       <h1>Ordini Beauty</h1>
-      <p class="muted">Clienti, consegne e guadagni · v6</p>
+      <p class="muted">Le tue clienti, le consegne e i tuoi guadagni</p>
       <form id="login-form">
-        <input type="email" id="login-email" placeholder="Email" required autocomplete="username">
+        <input type="email" id="login-email" placeholder="La tua email" required autocomplete="username">
         <input type="password" id="login-pass" placeholder="Password" required autocomplete="current-password">
-        <button type="submit" class="primary">Entra</button>
-        <button type="button" id="btn-register" class="link">Crea account</button>
-        <button type="button" id="btn-reset" class="link">Password dimenticata</button>
+        <button type="submit" class="big primary">Entra</button>
+        <button type="button" id="btn-register" class="link">Prima volta? Crea l'account</button>
+        <button type="button" id="btn-reset" class="link small-link">Password dimenticata</button>
         <p id="login-error" class="error"></p>
       </form>
+      <p class="versione">v7</p>
     </div>
   </section>
 
   <!-- App -->
   <section id="app" class="screen hidden">
-    <header class="topbar">
-      <h1 id="view-title">Da fare</h1>
-      <button id="btn-new" class="primary small">+ Nuovo</button>
+    <header class="topbar" id="topbar">
+      <div>
+        <div class="topbar-hello" id="hello"></div>
+        <h1 id="view-title">Oggi</h1>
+      </div>
     </header>
     <main id="view"></main>
+    <button id="fab" class="fab">＋ <span>Nuovo ordine</span></button>
     <nav class="tabbar">
-      <button data-view="todo" class="active">Da fare</button>
-      <button data-view="ordini">Ordini</button>
-      <button data-view="clienti">Clienti</button>
-      <button data-view="omaggi">Omaggi</button>
-      <button data-view="riepilogo">Riepilogo</button>
+      <button data-view="home" class="active"><span class="ico">🏠</span>Oggi</button>
+      <button data-view="ordini"><span class="ico">🛍️</span>Ordini</button>
+      <button data-view="clienti"><span class="ico">👩</span>Clienti</button>
+      <button data-view="omaggi"><span class="ico">🎁</span>Omaggi</button>
+      <button data-view="soldi"><span class="ico">💰</span>Soldi</button>
     </nav>
   </section>
 
-  <!-- Modale -->
-  <dialog id="modal"><div id="modal-body"></div></dialog>
+  <!-- Schermata a comparsa (ordine, cliente…) -->
+  <dialog id="sheet"><div id="sheet-body"></div></dialog>
+  <div id="toast" class="toast hidden"></div>
   <datalist id="dl-prodotti"></datalist>
   <datalist id="dl-omaggi"></datalist>
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v6)</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v7)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>
@@ -89,6 +95,6 @@
       document.getElementById("diagnosi").classList.remove("hidden");
     }, 5000);
   </script>
-  <script type="module" src="app.js?v=6"></script>
+  <script type="module" src="app.js?v=7"></script>
 </body>
 </html>
