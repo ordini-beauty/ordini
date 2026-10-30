@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=28";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=28";
-import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=28";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=32";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=32";
+import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, costiDaTotale, stimaTotale, fatturaInAttesa,
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=32";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -386,8 +386,8 @@ function bannerSoglia(mese = oggi().slice(0, 7)) {
   const speso = spesoMese(mese), perc = speso / soglia;
   if (perc < 0.8) return "";
   const nome = new Date(mese + "-01T00:00").toLocaleDateString("it-IT", { month: "long" });
-  return `<div class="banner ${perc >= 1 ? "rosso" : ""}" style="display:block">${perc >= 1 ? "" : ""} ${perc >= 1 ? `Hai superato la soglia: a ${nome} hai speso <b>${euro(speso)}</b> in acquisti (soglia ${euro(soglia)})`
-    : `A ${nome} hai già speso <b>${euro(speso)}</b> in acquisti: la soglia è ${euro(soglia)}`}
+  return `<div class="banner ${perc >= 1 ? "rosso" : ""}" style="display:block">${perc >= 1 ? "" : ""} ${perc >= 1 ? `Hai superato la soglia: a ${nome} hai speso <b>${euro(speso)}</b> in acquisti (soglia ${euro(soglia)}). Da qui sugli ordini paghi anche la tassa.`
+    : `A ${nome} hai già speso <b>${euro(speso)}</b> in acquisti: oltre ${euro(soglia)} paghi anche la tassa`}
     <div class="progress" style="margin-top:8px"><span style="width:${Math.min(100, Math.round(perc * 100))}%;background:${perc >= 1 ? "var(--red)" : "var(--gold)"}"></span></div></div>`;
 }
 // ---------- Livelli: in base a quanto vende alle clienti nel periodo ----------
@@ -535,6 +535,7 @@ function htmlListaAcquisti() {
       <div class="row"><h3>${casella("acquisti", a.id)}${dataLunga(a.data)}${a.numeroOrdine ? ` <span class="muted" style="font-weight:500;font-size:15px">· n° ${esc(a.numeroOrdine)}</span>` : ""}</h3>
         <span class="amount num">${euro(totaleAcquisto(a))}</span></div>
       <div class="sub">${esc((a.prodotti || []).map(p => `${qtaDi(p) > 1 ? qtaDi(p) + "× " : ""}${p.nome}`).join(", ")) || "Nessun prodotto"}</div>
+      ${fatturaInAttesa(a) ? `<span class="badge c-gold">Fattura da segnare</span>` : ""}
       ${a.arrivato === false ? `<span class="badge c-blue">${giorniDa(a.data) > 0 ? `In arrivo da ${plurale(giorniDa(a.data), "giorno", "giorni")}` : "In arrivo · ordinato oggi"}</span>` : `<span class="badge c-green">✓ Arrivato</span>`}
       ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : a.arrivato === false ? `${tot - usati} di ${tot} da assegnare` : `${tot - usati} di ${tot} in magazzino`}</span>` : ""}
       ${(a.omaggiRicevuti || []).length ? `<span class="badge c-gold">Omaggi ${somma(a.omaggiRicevuti, x => x.qta)}</span>` : ""}
@@ -702,6 +703,20 @@ function apriAcquisto(a, opz = {}) {
   acq.prodotti.forEach(p => { p.id ||= nuovoId(); if (p.daSet) { p.tipoAcquisto = "set"; return; }
     p.tipoAcquisto ||= "singolo"; if (p.codice === undefined) p.codice = codiceDi(p.nome, p.tipoAcquisto); p._cod = { [p.tipoAcquisto]: p.codice }; });
   let nuovoSet = null;                  // modulo "Aggiungi un set" aperto
+  // "Solo il totale": si scrive quanto si è pagato in tutto e a quanto si vende ogni prodotto; i costi li divido io
+  let modoTotale = a ? numIt(a.totalePagato) > 0 || numIt(a.totaleStimato) > 0 : true;
+  acq.totalePagato = a && numIt(a.totalePagato) ? a.totalePagato : "";
+  const prezzoCollegato = (pid) => { if (!a) return null; for (const v of vendite) for (const r of v.righe || [])
+    if (r.fonte?.acquistoId === a.id && r.fonte.prodottoId === pid && !isMia(v) && numIt(r.prezzo)) return numIt(r.prezzo); return null; };
+  acq.prodotti.forEach(p => { if (!p.daSet && (p.prezzo === undefined || p.prezzo === null))
+    p.prezzo = prezzoCollegato(p.id) ?? voceCatalogo(p.nome)?.prezzo ?? ""; });
+  const perChi = new Map();             // prodotto → cliente (o "Per me") a cui va il resto non ancora assegnato
+  const pseudoProdotti = () => acq.prodotti.map(p => ({ id: p.id, qta: qtaDi(p), prezzo: numIt(p.prezzo), valoreSet: Number(p.valoreSet) || 0, confezione: p.confezione, regalo: !!p.regalo }));
+  const stimaFattura = () => stimaTotale(acquisti, pseudoProdotti(), a?.id);
+  const totaleUsato = () => numIt(acq.totalePagato) || stimaFattura().totale;   // senza fattura uso la stima
+  const stime = () => costiDaTotale({ totalePagato: totaleUsato(), prodotti: pseudoProdotti() });
+  let regaloNuovo = false;              // il prossimo prodotto aggiunto è un regalo di Yves Rocher
+  const valorePezzo = (p) => p.daSet ? (Number(p.valoreSet) || 0) : numIt(p.prezzo);
   const setsIn = () => { const m = new Map(); acq.prodotti.forEach((p, i) => { if (!p.daSet) return;
     if (!m.has(p.daSet.id)) m.set(p.daSet.id, { info: p.daSet, comps: [] }); m.get(p.daSet.id).comps.push({ p, i }); }); return [...m.values()]; };
   const compsDi = (sid) => acq.prodotti.filter(p => p.daSet?.id === sid);
@@ -737,11 +752,24 @@ function apriAcquisto(a, opz = {}) {
     for (const x of richiesteTutte().filter(x => scelte.has(x.k))) {
       let p = acq.prodotti.find(p => p._daRichieste && chiave(p.nome) === chiave(x.r.nome));
       if (p) p.qta = qtaDi(p) + qtaDi(x.r);
-      else { p = { id: nuovoId(), nome: x.r.nome, qta: qtaDi(x.r), costo: costoDi(x.r.nome, "singolo"), tipoAcquisto: "singolo", codice: codiceDi(x.r.nome, "singolo"), _daRichieste: true }; acq.prodotti.push(p); }
+      else { p = { id: nuovoId(), nome: x.r.nome, qta: qtaDi(x.r), costo: costoDi(x.r.nome, "singolo"), tipoAcquisto: "singolo", codice: codiceDi(x.r.nome, "singolo"), _daRichieste: true,
+        prezzo: numIt(x.r.prezzo) || voceCatalogo(x.r.nome)?.prezzo || "" }; acq.prodotti.push(p); }
       collegamenti.push({ venditaId: x.v.id, rigaId: x.r.id, prodottoId: p.id });
     }
     scelte.clear(); segna();
   }
+
+  function htmlPerChi(p, compatto) {
+    const gia = somma(assegnatiA(p.id), x => x.qta), resto = qtaDi(p) - gia;
+    if (resto <= 0) return "";
+    const sel = perChi.get(p.id) || "";
+    const opzioni = [...clienti].sort((x, y) => x.nome.localeCompare(y.nome, "it"))
+      .map(c => `<option value="${c.id}" ${sel === c.id ? "selected" : ""}>${esc(c.nome)}</option>`).join("");
+    return `<div class="per-chi-sel ${compatto ? "compatto" : ""}"><span>${gia ? `Gli altri ${resto}` : resto > 1 ? "Per chi sono" : "Per chi è"}</span>
+      <select data-pchi="${p.id}"><option value="">Magazzino (da vendere)</option><option value="${IO}" ${sel === IO ? "selected" : ""}>Per me</option>
+        ${opzioni ? `<optgroup label="Clienti">${opzioni}</optgroup>` : ""}</select></div>`;
+  }
+  const htmlStima = (p) => modoTotale ? `<span class="stima" data-stima="${p.id}"></span>` : "";
 
   function htmlSets() {
     return setsIn().map(({ info: d, comps }) => { const q = nSetDi(comps.map(x => x.p)), tot = valoreSetTot(comps.map(x => x.p)), cs = numIt(d.costoSet);
@@ -749,23 +777,24 @@ function apriAcquisto(a, opz = {}) {
       <div class="row"><b><span class="tag-set">Set</span>${esc(d.nome)}</b><button class="x" data-xset="${d.id}" aria-label="Togli il set">×</button></div>
       <div class="prod-grid">
         <div><label>Quanti</label><div class="stepper"><button data-sq="${d.id}" data-d="-1">−</button><b>${q}</b><button data-sq="${d.id}" data-d="1">＋</button></div></div>
-        <div><label>Lo paghi (uno)</label><input class="costo-in" data-scosto="${d.id}" inputmode="decimal" value="${esc(inIt(d.costoSet))}" placeholder="€"></div></div>
+        ${modoTotale ? `<div class="hint" style="align-self:end;margin:0">Il costo viene dal totale dell'ordine</div>` : `<div><label>Lo paghi (uno)</label><input class="costo-in" data-scosto="${d.id}" inputmode="decimal" value="${esc(inIt(d.costoSet))}" placeholder="€"></div>`}</div>
       <div class="cod-row"><input class="cod-in" data-scod="${d.id}" value="${esc(d.codice || "")}" placeholder="Codice del set" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
       <div class="set-comp"><div class="set-riga set-testa"><span>Dentro</span><span>costa · vendi a</span></div>
         ${comps.map(({ p }) => { const per = assegnatiA(p.id); return `<div class="set-riga"><span>${pezziDi(p) > 1 ? `<b>${pezziDi(p)}×</b> ` : ""}${esc(p.nome)}
           ${per.length ? `<span class="per-chi"> → ${per.map(x => esc(nomeVendita(x.v))).join(", ")}</span>` : ""}</span>
-        <span class="num"><span class="muted" data-scosto-di="${p.id}">${euro(numIt(p.costo))}</span> · ${p.valoreSet ? euro(p.valoreSet) : "<span class='muted'>—</span>"}</span></div>`; }).join("")}</div>
-      ${tot ? `<div class="set-conto"><span>Se vendi tutto incassi <b>${euro(tot)}</b></span><span data-sguad="${d.id}" style="color:${tot - cs >= 0 ? "var(--green)" : "var(--red)"}">guadagno ${euro(Math.round((tot - cs) * 100) / 100)}</span></div>` : ""}
+        <span class="num"><span class="muted" data-scosto-di="${p.id}">${modoTotale ? "" : euro(numIt(p.costo))}</span> · ${p.valoreSet ? euro(p.valoreSet) : "<span class='muted'>—</span>"}</span></div>
+        ${htmlPerChi(p, true)}`; }).join("")}</div>
+      ${tot && !modoTotale ? `<div class="set-conto"><span>Se vendi tutto incassi <b>${euro(tot)}</b></span><span data-sguad="${d.id}" style="color:${tot - cs >= 0 ? "var(--green)" : "var(--red)"}">guadagno ${euro(Math.round((tot - cs) * 100) / 100)}</span></div>` : ""}
       <div class="hint">Il costo lo divido tra i prodotti in base al loro prezzo di vendita: chi vale di più costa di più.</div></div>`; }).join("");
   }
   function htmlNuovoSet() {
     const n = nuovoSet;
     return `<div class="add-box set-form">
       <div class="gift-sub" style="margin:0">Set, calendario o cofanetto</div>
-      <div class="hint" style="margin:0">Scrivi quanto lo paghi e cosa c'è dentro, con il prezzo a cui venderai ogni prodotto. Il costo di ogni prodotto lo calcolo io.</div>
+      <div class="hint" style="margin:0">${modoTotale ? "Scrivi cosa c'è dentro e a quanto venderai ogni prodotto: il costo lo ricavo dal totale dell'ordine." : "Scrivi quanto lo paghi e cosa c'è dentro, con il prezzo a cui venderai ogni prodotto. Il costo di ogni prodotto lo calcolo io."}</div>
       <input id="ns-nome" list="dl-set" placeholder="Nome (es. Calendario dell'Avvento 2026)" value="${esc(n.nome)}" autocomplete="off">
       <div class="grid2"><input id="ns-cod" class="cod-in" placeholder="Codice" value="${esc(n.codice)}" autocapitalize="characters" spellcheck="false" autocomplete="off">
-        <input id="ns-costo" inputmode="decimal" placeholder="Lo paghi € (uno)" value="${esc(inIt(n.costo))}"></div>
+        ${modoTotale ? `<input id="ns-costo" type="hidden" value="">` : `<input id="ns-costo" inputmode="decimal" placeholder="Lo paghi € (uno)" value="${esc(inIt(n.costo))}">`}</div>
       <div class="two-col"><span class="hint" style="margin:0;align-self:center">Quanti ne compri?</span><input id="ns-qta" inputmode="numeric" value="${esc(n.qta)}"></div>
       <div class="set-righe set-righe-testa"><span>Prodotto dentro</span><span>Pezzi</span><span>Vendi a €</span></div>
       ${n.comps.map((c, j) => `<div class="set-righe"><input data-ncn="${j}" list="dl-prodotti" placeholder="Prodotto" value="${esc(c.nome)}" autocomplete="off">
@@ -794,20 +823,26 @@ function apriAcquisto(a, opz = {}) {
         valoreSet: numIt(c.valore) || numIt(voceCatalogo(c.nome)?.prezzo) || 0, daSet: { ...info } }); }
     if (comps.some(c => !numIt(c.valore) && !numIt(voceCatalogo(c.nome)?.prezzo))) setTimeout(() => avviso("Manca il prezzo di vendita di qualche prodotto: senza, il costo non si divide bene"), 2600);
     ricalcolaSet(info.id); segna();
-    if (!info.costoSet) setTimeout(() => avviso("Ricordati di scrivere il costo del set"), 200);
+    if (!info.costoSet && !modoTotale) setTimeout(() => avviso("Ricordati di scrivere il costo del set"), 200);
     return true;
   }
 
   const disegna = () => mantieniScroll(() => {
     leggiNuovoSet();
     const richieste = richiesteTutte();
-    const totale = totaleAcquisto({ ...acq, prodotti: acq.prodotti.map(p => ({ ...p, costo: numIt(p.costo) })), spedizione: numIt(acq.spedizione) });
+    const totale = totaleAcquisto({ ...acq, totalePagato: 0, totaleStimato: 0, prodotti: acq.prodotti.map(p => ({ ...p, costo: numIt(p.costo) })), spedizione: numIt(acq.spedizione) });
     $("#sheet-body").innerHTML = testataSheet(a ? `Ordine del ${dataLunga(a.data)}` : "Ordine a Yves Rocher", false, 0, true) + `
       <div class="sh-main">
         <div class="question">${a ? "Ordine a Yves Rocher" : "Nuovo ordine a Yves Rocher"}</div>
         <div class="yesno"><div class="grid2">
           <div><label style="margin-top:0">Data</label><input type="date" id="a-data" value="${esc(acq.data)}"></div>
           <div><label style="margin-top:0">N° ordine</label><input id="a-num" value="${esc(acq.numeroOrdine)}" placeholder="Es. 1234567" autocomplete="off"></div></div></div>
+
+        <div class="yesno"><div class="yn-q">Quanto hai pagato?</div>
+          <div class="mini-seg seg-modo"><button data-modo="tot" class="${modoTotale ? "on" : ""}">Solo il totale</button><button data-modo="pezzo" class="${modoTotale ? "" : "on"}">Prodotto per prodotto</button></div>
+          ${modoTotale ? `<label style="margin-top:0">Totale della fattura (spedizione compresa)</label><input id="a-totpag" class="totale-in" inputmode="decimal" value="${esc(inIt(acq.totalePagato))}" placeholder="Fattura non ancora arrivata">
+            <div class="hint">Per ogni prodotto scrivi il prezzo di vendita, come nell'ordine. Se la fattura non è ancora arrivata lascia vuoto: uso una stima e te lo ricordo; quando arriva, scrivi il totale e i conti si sistemano.</div>`
+          : `<div class="hint">Scrivi il costo di ogni prodotto: il totale lo calcolo io.</div>`}</div>
 
         ${richieste.length ? `<div class="yesno richieste"><div class="yn-q">Richieste delle clienti da ordinare</div>
           <div class="hint" style="margin:-4px 0 10px">Tocca quelle che stai ordinando adesso.</div>
@@ -820,18 +855,25 @@ function apriAcquisto(a, opz = {}) {
           ${acq.prodotti.length ? `<button class="pill c-blue" id="copia-codici">Copia codici</button>` : ""}</div>
         ${htmlSets()}
         ${acq.prodotti.map((p, i) => { if (p.daSet) return ""; const per = assegnatiA(p.id); return `<div class="card prod-card">
-          <div class="row"><b>${p.confezione ? "" : ""}${esc(p.nome)}</b><button class="x" data-xp="${i}" aria-label="Togli">×</button></div>
+          <div class="row"><b>${p.regalo ? `<span class="tag-set tag-regalo">Regalo</span>` : ""}${esc(p.nome)}</b><button class="x" data-xp="${i}" aria-label="Togli">×</button></div>
           ${per.length ? `<div class="per-chi">→ ${per.map(x => `${esc(nomeVendita(x.v))}${x.qta > 1 ? ` (${x.qta})` : ""}`).join(", ")}</div>` : ""}
           <div class="prod-grid">
             <div><label>Quanti</label><div class="stepper"><button data-pq="${i}" data-d="-1">−</button><b>${qtaDi(p)}</b><button data-pq="${i}" data-d="1">＋</button></div></div>
-            <div><label>Costo ${p.confezione ? "confezione" : "a pezzo"}</label><input class="costo-in" data-pc="${i}" inputmode="decimal" value="${esc(inIt(p.costo))}" placeholder="€"></div>
+            ${p.regalo
+              ? `<div><label>Lo vendi a (uno)</label><input class="costo-in" data-pp="${i}" inputmode="decimal" value="${esc(inIt(p.prezzo))}" placeholder="€"></div>`
+              : modoTotale && !p.confezione
+              ? `<div><label>Lo vendi a (uno)</label><input class="costo-in" data-pp="${i}" inputmode="decimal" value="${esc(inIt(p.prezzo))}" placeholder="€"></div>`
+              : `<div><label>Costo ${p.confezione ? "confezione" : "a pezzo"}</label><input class="costo-in" data-pc="${i}" inputmode="decimal" value="${esc(inIt(p.costo))}" placeholder="€"></div>`}
           </div>
+          ${p.regalo ? `<span class="stima">Regalo di Yves Rocher: non ti costa nulla, quello che incassi è tutto guadagno.</span>` : htmlStima(p)}
+          <button class="link link-piccolo" data-preg="${i}">${p.regalo ? "Non è un regalo" : "È un regalo di Yves Rocher"}</button>
           ${p.confezione ? `<label>Valore a catalogo dei prodotti dentro (una confezione)</label><input data-pv="${i}" inputmode="decimal" value="${esc(inIt(p.confezione.valore))}" placeholder="€">` : ""}
           <div class="cod-row">
             ${p.confezione ? "" : `<div class="mini-seg"><button data-ptipo="${i}" data-t="singolo" class="${p.tipoAcquisto !== "bundle" ? "on" : ""}">Singolo</button><button data-ptipo="${i}" data-t="bundle" class="${p.tipoAcquisto === "bundle" ? "on" : ""}">Bundle</button></div>`}
             <input class="cod-in" data-pcod="${i}" value="${esc(p.codice || "")}" placeholder="Codice" autocomplete="off" autocapitalize="characters" spellcheck="false">
           </div>
           ${p.tipoAcquisto === "bundle" && pezziBundleDi(p.nome) ? `<div class="hint" style="margin:4px 0 0">1 bundle = ${pezziBundleDi(p.nome)} pezzi${qtaDi(p) % pezziBundleDi(p.nome) ? "" : ` · stai ordinando ${qtaDi(p) / pezziBundleDi(p.nome)} bundle`}</div>` : ""}
+          ${htmlPerChi(p)}
         </div>`; }).join("")}${acq.prodotti.length ? "" : `<div class="hint" style="margin:0 0 10px">Nessun prodotto: aggiungili qui sotto.</div>`}
 
         <div class="add-box">
@@ -839,18 +881,20 @@ function apriAcquisto(a, opz = {}) {
           <div class="cod-row" style="margin:0">
             <div class="mini-seg"><button data-ntipo-acq="singolo" class="${tipoNuovo === "singolo" ? "on" : ""}">Singolo</button><button data-ntipo-acq="bundle" class="${tipoNuovo === "bundle" ? "on" : ""}">Bundle</button></div>
             <input class="cod-in" id="np-cod" placeholder="Codice" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
-          <div class="three"><input id="np-costo" inputmode="decimal" placeholder="Costo €"><input id="np-qta" inputmode="numeric" value="1" aria-label="Quanti">
+          <div class="three"><input id="np-costo" inputmode="decimal" placeholder="${modoTotale || regaloNuovo ? "Lo vendi a €" : "Costo €"}"><input id="np-qta" inputmode="numeric" value="1" aria-label="Quanti">
             <button class="c-orange" id="np-add">＋</button></div>
+          <button class="chip ${regaloNuovo ? "sel" : ""}" id="np-regalo" style="justify-self:start">${regaloNuovo ? "✓ " : ""}È un regalo di Yves Rocher (da rivendere)</button>
           <button class="set-apri" id="np-set"><span class="tag-set">Set</span> Set, calendario o cofanetto <span class="muted">›</span></button>
           ${nuovaConf ? `<input id="np-valore" inputmode="decimal" placeholder="Valore a catalogo dei prodotti dentro €"><div class="hint" style="margin:0">Poi venderai i prodotti uno per uno: il costo lo calcolo io.</div>` : ""}
         </div>
         ${nuovoSet ? htmlNuovoSet() : ""}
 
-        <div class="yesno" style="margin-top:16px"><label style="margin-top:0">Spese di spedizione o altro (facoltativo)</label>
+        ${modoTotale ? `<div class="result c-orange"><div class="r-lbl">Se vendi tutto</div><div class="r-val num" id="a-tot"></div><div class="r-sub" id="a-tot-sub"></div></div>`
+        : `<div class="yesno" style="margin-top:16px"><label style="margin-top:0">Spese di spedizione o altro (facoltativo)</label>
           <input id="a-sped" inputmode="decimal" value="${esc(inIt(acq.spedizione || ""))}" placeholder="0,00 €">
           <div class="hint">Le divido sui prodotti, così il guadagno è giusto.</div></div>
 
-        <div class="result c-orange"><div class="r-lbl">Totale pagato a Yves Rocher</div><div class="r-val num" id="a-tot">${euro(totale)}</div></div>
+        <div class="result c-orange"><div class="r-lbl">Totale pagato a Yves Rocher</div><div class="r-val num" id="a-tot">${euro(totale)}</div></div>`}
 
         <div class="yesno"><div class="yn-q">È arrivato?</div><div class="yn-b">
           <button data-arr="1" class="${acq.arrivato !== false ? "on-yes" : ""}">Sì</button>
@@ -864,20 +908,51 @@ function apriAcquisto(a, opz = {}) {
         ${a ? `<button class="danger" id="a-del" style="width:100%;margin-top:12px">Elimina questo ordine</button>` : ""}
       </div>
       <div class="sh-foot"><button class="big primary" id="a-salva">✓ Salva</button></div>`;
-    collega();
+    collega(); aggiornaStime();
   });
 
   const aggiornaTotale = () => {
-    const t = totaleAcquisto({ ...acq, prodotti: acq.prodotti.map(p => ({ ...p, costo: numIt(p.costo) })), spedizione: numIt(acq.spedizione) });
+    if (modoTotale) return aggiornaStime();
+    const t = totaleAcquisto({ ...acq, totalePagato: 0, totaleStimato: 0, prodotti: acq.prodotti.map(p => ({ ...p, costo: numIt(p.costo) })), spedizione: numIt(acq.spedizione) });
     $("#a-tot").textContent = euro(t);
   };
+  function aggiornaStime() {
+    if (!modoTotale) return;
+    const st = stime(), T = totaleUsato(), stimato = !numIt(acq.totalePagato), sf = stimaFattura();
+    const incasso = somma(acq.prodotti, p => valorePezzo(p) * qtaDi(p)), senzaPrezzo = acq.prodotti.filter(p => !valorePezzo(p)).length;
+    for (const p of acq.prodotti) {
+      if (p.regalo) continue;
+      const el = $(`[data-stima="${p.id}"]`), c = st.get(p.id) || 0;
+      if (el) el.innerHTML = !T ? "Scrivi a quanto lo vendi" : !valorePezzo(p) ? "Scrivi a quanto lo vendi" :
+        `${stimato ? "stima: " : ""}ti costa circa <b>${euro(c)}</b> l'uno · guadagni <b style="color:${valorePezzo(p) - c >= 0 ? "var(--green)" : "var(--red)"}">${euro(Math.round((valorePezzo(p) - c) * 100) / 100)}</b>`;
+      const sc = $(`[data-scosto-di="${p.id}"]`); if (sc) sc.textContent = T && valorePezzo(p) ? `~${euro(c)}` : "";
+    }
+    const tot = $("#a-tot"), sub = $("#a-tot-sub"); if (!tot) return;
+    tot.textContent = euro(Math.round(incasso * 100) / 100);
+    const g = Math.round((incasso - T) * 100) / 100;
+    sub.innerHTML = !T ? "Aggiungi i prodotti con il prezzo di vendita" : `${stimato ? (sf.rapporto ? `fattura stimata ${euro(T)} (in media paghi il ${Math.round(sf.rapporto * 100)}% del prezzo di vendita)` : `fattura stimata ${euro(T)} (prezzo di vendita meno lo sconto del 25%)`) : `pagato ${euro(T)}`} · guadagno previsto <b>${euro(g)}</b>${senzaPrezzo ? ` · ${plurale(senzaPrezzo, "prodotto", "prodotti")} senza prezzo` : ""}`;
+  }
 
   function collega() {
     $("#sh-back").addEventListener("click", () => chiudiSheet());
     $("#a-data").addEventListener("change", e => { acq.data = e.target.value; segna(); });
     $("#a-num").addEventListener("input", e => { acq.numeroOrdine = e.target.value; segna(); });
     $("#a-note").addEventListener("input", e => { acq.note = e.target.value; segna(); });
-    $("#a-sped").addEventListener("input", e => { acq.spedizione = e.target.value; segna(); aggiornaTotale(); });
+    $("#a-sped")?.addEventListener("input", e => { acq.spedizione = e.target.value; segna(); aggiornaTotale(); });
+    $("#a-totpag")?.addEventListener("input", e => { acq.totalePagato = e.target.value; segna(); aggiornaStime(); });
+    $$("[data-preg]").forEach(b => b.addEventListener("click", () => { const p = acq.prodotti[+b.dataset.preg];
+      p.regalo = !p.regalo; if (p.regalo) { if (!numIt(p.prezzo)) p.prezzo = voceCatalogo(p.nome)?.prezzo ?? ""; p.costo = 0; } segna(); disegna(); }));
+    $("#np-regalo")?.addEventListener("click", () => { const salva = { n: nomeIn.value, c: costoIn.value, q: $("#np-qta").value, k: codIn.value };
+      regaloNuovo = !regaloNuovo; disegna(); $("#np-nome").value = salva.n; $("#np-costo").value = salva.c; $("#np-qta").value = salva.q; $("#np-cod").value = salva.k; });
+    $$("[data-pp]").forEach(i => i.addEventListener("input", () => { acq.prodotti[+i.dataset.pp].prezzo = i.value; segna(); aggiornaStime(); }));
+    $$("[data-pchi]").forEach(sl => sl.addEventListener("change", () => { sl.value ? perChi.set(sl.dataset.pchi, sl.value) : perChi.delete(sl.dataset.pchi); segna(); }));
+    $$("[data-modo]").forEach(b => b.addEventListener("click", () => {
+      const vuole = b.dataset.modo === "tot"; if (vuole === modoTotale) return;
+      if (vuole) { acq.prodotti.forEach(p => { if (!p.daSet && !numIt(p.prezzo)) p.prezzo = prezzoCollegato(p.id) ?? voceCatalogo(p.nome)?.prezzo ?? ""; });
+        if (!numIt(acq.totalePagato)) { const t = totaleAcquisto({ ...acq, totalePagato: 0, totaleStimato: 0, prodotti: acq.prodotti.map(p => ({ ...p, costo: numIt(p.costo) })), spedizione: numIt(acq.spedizione) }); if (t) acq.totalePagato = t; } }
+      else { const st = stime(); acq.prodotti.forEach(p => { if (!numIt(p.costo) && !p.regalo) p.costo = Math.round((st.get(p.id) || 0) * 100) / 100; }); acq.spedizione = 0; acq.totaleStimato = null; }
+      modoTotale = vuole; segna(); disegna();
+    }));
     $$("[data-ric-k]").forEach(b => b.addEventListener("click", () => { scelte.has(b.dataset.ricK) ? scelte.delete(b.dataset.ricK) : scelte.add(b.dataset.ricK); disegna(); }));
     $("#ric-tutte")?.addEventListener("click", () => { richiesteTutte().forEach(x => scelte.add(x.k)); disegna(); });
     $("#ric-agg")?.addEventListener("click", () => { if (!scelte.size) return; aggiungiRichieste(); disegna(); avviso("Aggiunte: scrivi quanto le hai pagate"); });
@@ -949,7 +1024,7 @@ function apriAcquisto(a, opz = {}) {
       if (daCod?.tipo === "set") { nuovoSet = setDaCatalogo(daCod.voce, parseInt($("#np-qta").value) || 1); nomeIn.value = ""; $(".set-form")?.remove(); disegna(); avviso("Set trovato: controlla e tocca “Aggiungi il set”"); return; }
       if (!daCod && voceSet(nomeIn.value)) { nuovoSet = setDaCatalogo(voceSet(nomeIn.value), parseInt($("#np-qta").value) || 1); nomeIn.value = ""; $(".set-form")?.remove(); disegna(); return; }
       if (daCod) { nomeIn.value = daCod.voce.nome; tipoNuovo = daCod.tipo; $$("[data-ntipo-acq]").forEach(x => x.classList.toggle("on", x.dataset.ntipoAcq === tipoNuovo)); }
-      const c = costoDi(nomeIn.value, tipoNuovo);
+      const c = modoTotale ? (voceCatalogo(nomeIn.value)?.prezzo ?? "") : costoDi(nomeIn.value, tipoNuovo);
       if (c !== "" && !costoIn.value) costoIn.value = inIt(c);
       codIn.value = codiceDi(nomeIn.value, tipoNuovo) || codIn.value;
       if (tipoNuovo === "bundle" && pezziBundleDi(nomeIn.value)) $("#np-qta").value = pezziBundleDi(nomeIn.value);
@@ -958,7 +1033,7 @@ function apriAcquisto(a, opz = {}) {
     nomeIn.addEventListener("keydown", e => { if (e.key === "Enter") { riempiDaCatalogo(); costoIn.focus(); } });
     $$("[data-ntipo-acq]").forEach(b => b.addEventListener("click", () => {
       tipoNuovo = b.dataset.ntipoAcq; $$("[data-ntipo-acq]").forEach(x => x.classList.toggle("on", x === b));
-      if (nomeIn.value.trim()) { codIn.value = codiceDi(nomeIn.value, tipoNuovo); const c = costoDi(nomeIn.value, tipoNuovo); if (c !== "") costoIn.value = inIt(c);
+      if (nomeIn.value.trim()) { codIn.value = codiceDi(nomeIn.value, tipoNuovo); const c = modoTotale ? "" : costoDi(nomeIn.value, tipoNuovo); if (c !== "") costoIn.value = inIt(c);
         if (tipoNuovo === "bundle" && pezziBundleDi(nomeIn.value)) $("#np-qta").value = pezziBundleDi(nomeIn.value); }
     }));
     $("#np-conf")?.addEventListener("click", () => {
@@ -967,7 +1042,9 @@ function apriAcquisto(a, opz = {}) {
     });
     const aggiungi = () => {
       const nome = nomeIn.value.trim(); if (!nome) { nomeIn.focus(); return; }
-      const p = { id: nuovoId(), nome, qta: Math.max(1, parseInt($("#np-qta").value) || 1), costo: costoIn.value, tipoAcquisto: nuovaConf ? "singolo" : tipoNuovo, codice: normCodice(codIn.value) };
+      const p = { id: nuovoId(), nome, qta: Math.max(1, parseInt($("#np-qta").value) || 1), costo: modoTotale ? 0 : costoIn.value, tipoAcquisto: nuovaConf ? "singolo" : tipoNuovo, codice: normCodice(codIn.value),
+        prezzo: modoTotale || regaloNuovo ? costoIn.value : (voceCatalogo(nome)?.prezzo ?? "") };
+      if (regaloNuovo) { p.regalo = true; p.costo = 0; regaloNuovo = false; }
       if (nuovaConf) {
         const val = numIt($("#np-valore").value);
         if (!val) { $("#np-valore").focus(); return avviso("Scrivi quanto valgono a catalogo i prodotti dentro"); }
@@ -985,7 +1062,7 @@ function apriAcquisto(a, opz = {}) {
 
   // Lista da copiare per fare l'ordine sul sito Yves Rocher
   async function copiaCodici() {
-    const righe = setsIn().map(({ info: d, comps }) => `${d.codice || "(manca il codice)"}  x${nSetDi(comps.map(x => x.p))}  ${d.nome}`).concat(acq.prodotti.filter(p => !p.daSet).map(p => {
+    const righe = setsIn().map(({ info: d, comps }) => `${d.codice || "(manca il codice)"}  x${nSetDi(comps.map(x => x.p))}  ${d.nome}`).concat(acq.prodotti.filter(p => !p.daSet && !p.regalo).map(p => {
       const pb = p.tipoAcquisto === "bundle" ? pezziBundleDi(p.nome) : 0;
       const quanti = pb && qtaDi(p) % pb === 0 ? qtaDi(p) / pb : qtaDi(p);
       return `${p.codice || "(manca il codice)"}  x${quanti}  ${p.nome}${p.tipoAcquisto === "bundle" ? " (bundle)" : ""}`;
@@ -993,7 +1070,7 @@ function apriAcquisto(a, opz = {}) {
     const testo = `Ordine Yves Rocher ${dataIt(acq.data)}\n` + righe.join("\n");
     try { await navigator.clipboard.writeText(testo); avviso(`Copiati ${plurale(righe.length, "codice", "codici")}`); }
     catch { alert(testo); }
-    const mancano = acq.prodotti.filter(p => !p.daSet && !p.codice).length + setsIn().filter(s => !s.info.codice).length;
+    const mancano = acq.prodotti.filter(p => !p.daSet && !p.regalo && !p.codice).length + setsIn().filter(s => !s.info.codice).length;
     if (mancano) setTimeout(() => avviso(`Attenzione: ${plurale(mancano, "prodotto è", "prodotti sono")} senza codice`), 2600);
   }
 
@@ -1017,21 +1094,27 @@ function apriAcquisto(a, opz = {}) {
 
   async function salva() {
     if (!acq.prodotti.length) return avviso("Aggiungi almeno un prodotto");
-    if (acq.prodotti.some(p => p.daSet ? !numIt(p.daSet.costoSet) : !numIt(p.costo)) && !confirm("Alcuni prodotti non hanno il costo: il guadagno non sarà giusto finché non lo scrivi. Salvo lo stesso?")) return;
+
+    if (modoTotale && acq.prodotti.some(p => !valorePezzo(p) && !p.confezione) && !confirm("Alcuni prodotti non hanno il prezzo di vendita: per loro il costo non si calcola bene. Salvo lo stesso?")) return;
+    if (!modoTotale && acq.prodotti.some(p => p.regalo ? false : p.daSet ? !numIt(p.daSet.costoSet) : !numIt(p.costo)) && !confirm("Alcuni prodotti non hanno il costo: il guadagno non sarà giusto finché non lo scrivi. Salvo lo stesso?")) return;
     const codiciExtra = new Map(acq.prodotti.map(p => [p.id, { ...(p._cod || {}), [p.tipoAcquisto]: p.codice }]));
     if (nuovoSet && $("#ns-nome")) { leggiNuovoSet(); if (nuovoSet.nome.trim() && !confirm("Hai un set non ancora aggiunto: lo lascio fuori?")) return; }
-    const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: numIt(p.costo), tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice),
+    const st = modoTotale ? stime() : null;
+    const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: st ? Math.round((st.get(p.id) || 0) * 100) / 100 : numIt(p.costo),
+      tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice), ...(!p.daSet && numIt(p.prezzo) ? { prezzo: numIt(p.prezzo) } : {}), ...(p.regalo ? { regalo: true } : {}),
       ...(p.daSet ? { daSet: { id: p.daSet.id, nome: p.daSet.nome, codice: normCodice(p.daSet.codice), costoSet: numIt(p.daSet.costoSet) }, valoreSet: Number(p.valoreSet) || 0, pezziSet: pezziDi(p) } : {}),
       ...(p.confezione ? { confezione: { valore: numIt(p.confezione.valore) } } : {}) }));
-    const dati = { ...senzaId(acq), prodotti, spedizione: numIt(acq.spedizione), arrivato: acq.arrivato !== false,
+    const fatturaVuota = modoTotale && !numIt(acq.totalePagato);
+    const dati = { ...senzaId(acq), prodotti, spedizione: modoTotale ? 0 : numIt(acq.spedizione), totalePagato: modoTotale && !fatturaVuota ? numIt(acq.totalePagato) : null,
+      totaleStimato: fatturaVuota ? (totaleUsato() || null) : null, arrivato: acq.arrivato !== false,
       arrivatoIl: acq.arrivato !== false ? (acq.arrivatoIl || oggi()) : null, aggiornato: new Date().toISOString() };
     const soglia = sogliaAcquisti(), mese = String(dati.data || "").slice(0, 7);
     if (soglia && mese) {
       const prima = spesoMese(mese, nuovoIdAcq), dopo = spesoMese(mese, nuovoIdAcq, totaleAcquisto(dati));
       const nomeMese = new Date(mese + "-01T00:00").toLocaleDateString("it-IT", { month: "long" });
-      if (dopo >= soglia && prima < soglia && !confirm(`Attenzione: con quest'ordine a ${nomeMese} arrivi a ${euro(dopo)} di acquisti, sopra la tua soglia di ${euro(soglia)}.\n\nSalvo lo stesso?`)) return;
+      if (dopo >= soglia && prima < soglia && !confirm(`Attenzione: con quest'ordine a ${nomeMese} arrivi a ${euro(dopo)} di acquisti, sopra la soglia di ${euro(soglia)}: sulla parte in più paghi anche la tassa.\n\nSalvo lo stesso?`)) return;
     }
-    const mod = [{ ref: refAcquisto(nuovoIdAcq), prima: a ? senzaId(a) : null, dopo: dati }, ...modificheVendite(nuovoIdAcq, prodotti)];
+    const mod = [{ ref: refAcquisto(nuovoIdAcq), prima: a ? senzaId(a) : null, dopo: dati }, ...modificheVendite(nuovoIdAcq, prodotti), ...venditeDaAssegnare(dati)];
     $("#a-salva").disabled = true;
     await scriviConAnnulla(mod, null);
     // ricordo costo e codici per la prossima volta
@@ -1043,14 +1126,34 @@ function apriAcquisto(a, opz = {}) {
     for (const p of prodotti) {
       if (p.daSet) continue;
       const agg = { nome: p.nome };
-      if (p.costo && !p.confezione) agg[p.tipoAcquisto === "bundle" ? "costoBundle" : "costo"] = p.costo;
+      if (p.costo && !p.confezione && !modoTotale && !p.regalo) agg[p.tipoAcquisto === "bundle" ? "costoBundle" : "costo"] = p.costo;
+      if (p.prezzo && !voceCatalogo(p.nome)?.prezzo) agg.prezzo = p.prezzo;
       const cod = codiciExtra.get(p.id) || {};
       if (normCodice(cod.singolo)) agg.codiceSingolo = normCodice(cod.singolo);
       if (normCodice(cod.bundle)) agg.codiceBundle = normCodice(cod.bundle);
       if (Object.keys(agg).length > 1) setDoc(doc(col("catalogo"), slug(p.nome)), agg, { merge: true });
     }
     chiudiSheet(true);
+    const nAss = [...perChi.values()].length;
+    if (nAss) avviso(`✓ Salvato · ${plurale(nAss, "prodotto assegnato", "prodotti assegnati")}`); else
     avviso(a ? "✓ Ordine aggiornato" : collegamenti.length ? `✓ Salvato: ${plurale(collegamenti.length, "richiesta collegata", "richieste collegate")}` : "✓ Ordine salvato");
+  }
+
+  // prodotti assegnati dal selettore "Per chi": una vendita nuova per ogni cliente
+  function venditeDaAssegnare(dati) {
+    if (!perChi.size) return [];
+    const indice = indiceProdotti([{ ...dati, id: nuovoIdAcq }]), gruppi = new Map();
+    for (const p of acq.prodotti) {
+      const chi = perChi.get(p.id); if (!chi) continue;
+      const resto = qtaDi(p) - somma(assegnatiA(p.id), x => x.qta); if (resto <= 0) continue;
+      const costo = indice.get(`${nuovoIdAcq}:${p.id}`)?.costoPezzo || 0;
+      const prezzo = chi === IO ? Math.round(costo * 100) / 100 : (numIt(p.prezzo) || Number(p.valoreSet) || numIt(voceCatalogo(p.nome)?.prezzo) || 0);
+      if (!gruppi.has(chi)) gruppi.set(chi, []);
+      gruppi.get(chi).push({ id: nuovoId(), nome: p.nome.trim(), qta: resto, prezzo, consegnato: chi === IO && dati.arrivato, fonte: { acquistoId: nuovoIdAcq, prodottoId: p.id } });
+    }
+    return [...gruppi].map(([clienteId, righe]) => ({ ref: refVendita(nuovoId()), prima: null, dopo: { data: dati.data || oggi(), clienteId,
+      pagato: clienteId === IO, pagatoIl: clienteId === IO ? (dati.data || oggi()) : null, note: "", sconto: 0, omaggiDati: [], riacquistoGiorni: null, righe,
+      aggiornato: new Date().toISOString() } }));
   }
 
   async function elimina() {
@@ -1147,7 +1250,7 @@ function apriVendita(v, opz = {}) {
       const uguale = ven.righe.find(r => r.fonte && r.fonte.acquistoId === fonte.acquistoId && r.fonte.prodottoId === fonte.prodottoId);
       if (uguale) uguale.qta = qtaDi(uguale) + 1;
       else ven.righe.push({ id: nuovoId(), nome: g.nome, qta: 1, fonte, consegnato: mia() && f.arrivato,
-        prezzo: mia() ? Math.round(f.costoPezzo * 100) / 100 : (voceCatalogo(g.nome)?.prezzo ?? (indice().get(`${f.acquistoId}:${f.prodottoId}`)?.prodotto.valoreSet || "")) });
+        prezzo: mia() ? Math.round(f.costoPezzo * 100) / 100 : (voceCatalogo(g.nome)?.prezzo ?? (indice().get(`${f.acquistoId}:${f.prodottoId}`)?.prodotto.prezzo || indice().get(`${f.acquistoId}:${f.prodottoId}`)?.prodotto.valoreSet || "")) });
     }
     segna();
   }
@@ -1574,6 +1677,12 @@ function renderHome() {
         <div class="actions"><button class="c-purple" data-arrivato="${a.id}">È arrivato</button></div></div>`;
     }
   }
+  const senzaFattura = acquisti.filter(fatturaInAttesa);
+  if (senzaFattura.length) {
+    h += `<div class="section"><h2>Fatture da segnare</h2><span class="count c-gold">${senzaFattura.length}</span></div>`;
+    for (const a of senzaFattura) h += `<div class="card b-gold tap" data-apri-acq="${a.id}"><div class="row"><div><h3>Ordine del ${dataLunga(a.data)}${a.numeroOrdine ? ` · n° ${esc(a.numeroOrdine)}` : ""}</h3>
+        <div class="sub">Totale stimato ${euro(totaleAcquisto(a))}: quando arriva la fattura, scrivi il totale vero</div></div><span class="muted">›</span></div></div>`;
+  }
   if (consegne.length) {
     h += `<div class="section" id="sec-consegne"><h2>Da consegnare</h2><span class="count c-orange">${consegne.length}</span></div>`;
     consegne.forEach(([k, l], i) => {
@@ -1612,6 +1721,7 @@ function renderHome() {
   $$("[data-view-go]").forEach(b => b.addEventListener("click", () => vai(b.dataset.viewGo)));
   $("#fai-ordine")?.addEventListener("click", () => apriAcquisto(null, { richieste: true }));
   $("#banner-backup")?.addEventListener("click", scaricaBackup);
+  $$("[data-apri-acq]").forEach(b => b.addEventListener("click", () => apriAcquisto(acquisti.find(x => x.id === b.dataset.apriAcq))));
   $$("[data-arrivato]").forEach(b => b.addEventListener("click", async () => {
     const a = acquistoDi(b.dataset.arrivato);
     await scriviConAnnulla([{ ref: refAcquisto(a.id), prima: senzaId(a), dopo: { ...senzaId(a), arrivato: true, arrivatoIl: oggi() } }], "Arrivato! I prodotti sono pronti da consegnare");
@@ -1972,7 +2082,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v28</p>`;
+    <p class="versione" style="text-align:center">v32</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
@@ -2393,7 +2503,7 @@ function calcolaPromemoria() {
   if (p.soglia !== false && sg && spesoOra >= sg) {
     const ora = new Date(); ora.setMinutes(0, 0, 0);
     lista.push({ id: `soglia:${meseOra}:${sg}`, quando: ora.getTime(), titolo: "Soglia acquisti superata",
-      testo: `Questo mese hai speso ${euro(spesoOra)} in acquisti Yves Rocher (soglia ${euro(sg)}).` });
+      testo: `Questo mese hai speso ${euro(spesoOra)} in acquisti Yves Rocher: oltre ${euro(sg)} paghi anche la tassa.` });
   }
   return lista.filter(x => x.quando > Date.now() - 3600000);
 }

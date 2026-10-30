@@ -3,7 +3,9 @@
 // ACQUISTO (ordine a Yves Rocher)
 //   { id, data, numeroOrdine, note, arrivato, arrivatoIl, spedizione, omaggiRicevuti:[{nome,qta}],
 //     prodotti: [{ id, nome, qta, costo /*a pezzo*/, confezione?: { valore } /*vecchi calendari*/,
-//                  daSet?: { id, nome, codice, costoSet }, valoreSet /*prezzo di vendita*/, pezziSet /*pezzi in un set*/ }] }
+//                  daSet?: { id, nome, codice, costoSet }, valoreSet /*prezzo di vendita*/, pezziSet /*pezzi in un set*/,
+//                  prezzo /*prezzo di vendita a pezzo*/, regalo? /*regalato da Yves Rocher: costo 0, si rivende*/ }],
+//     totalePagato? /*se c'è, l'ordine ha solo il totale: i costi si dividono in proporzione ai prezzi di vendita*/ }
 // VENDITA (ordine di una cliente, oppure "Per me")
 //   { id, data, clienteId (o IO o STORICO + clientiStorico), pagato, pagatoIl, note, sconto,
 //     omaggiDati:[{nome,qta}], riacquistoGiorni,
@@ -12,7 +14,7 @@
 //               costo?: numero                       // costo a pezzo noto senza fonte (solo dati convertiti)
 //            }] }
 //   Riga senza fonte e senza costo = "da ordinare" (richiesta della cliente non ancora acquistata).
-import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=28";
+import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=32";
 
 export { IO, STORICO, chiave };
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -21,24 +23,54 @@ export const isMia = (v) => v.clienteId === IO;
 const chiaveFonte = (f) => f ? `${f.acquistoId}:${f.prodottoId}` : null;
 
 // ---------- Acquisti ----------
+// ordine segnato col solo totale: quello della fattura, o una stima finché la fattura non arriva
+const totaleFattura = (a) => Number(a.totalePagato) || Number(a.totaleStimato) || 0;
+export const aTotale = (a) => totaleFattura(a) > 0;
+export const fatturaInAttesa = (a) => !(Number(a.totalePagato) > 0) && Number(a.totaleStimato) > 0;
 export function totaleAcquisto(a) {
-  return r2((a.prodotti || []).reduce((s, p) => s + (Number(p.costo) || 0) * qtaDi(p), 0) + (Number(a.spedizione) || 0));
+  if (aTotale(a)) return r2(totaleFattura(a));
+  return r2((a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : Number(p.costo) || 0) * qtaDi(p), 0) + (Number(a.spedizione) || 0));
+}
+// prezzo di vendita a pezzo usato per dividere il totale (per i vecchi calendari: valore della confezione)
+export const valoreVendita = (p) => p.confezione ? (Number(p.confezione.valore) || 0) : (Number(p.prezzo) || Number(p.valoreSet) || 0);
+// costo a pezzo di ogni prodotto quando si conosce solo il totale: si divide in proporzione al prezzo di vendita
+export function costiDaTotale(a) {
+  const T = totaleFattura(a), prodotti = a.prodotti || [];
+  const pagati = prodotti.filter(p => !p.regalo);            // i regali di Yves Rocher non costano nulla
+  const pesoTot = pagati.reduce((s, p) => s + valoreVendita(p) * qtaDi(p), 0);
+  const pezzi = pagati.reduce((s, p) => s + qtaDi(p), 0);
+  return new Map(prodotti.map(p => [p.id, p.regalo ? 0 : pesoTot > 0 ? T * valoreVendita(p) / pesoTot : (pezzi ? T / pezzi : 0)]));
 }
 
 // Indice dei prodotti acquistati con il costo a pezzo comprensivo della spedizione (ripartita sul valore)
 export function indiceProdotti(acquisti) {
   const m = new Map();
   for (const a of acquisti) {
-    const base = (a.prodotti || []).reduce((s, p) => s + (Number(p.costo) || 0) * qtaDi(p), 0);
+    const daTot = aTotale(a) ? costiDaTotale(a) : null;
+    const base = (a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : Number(p.costo) || 0) * qtaDi(p), 0);
     const sped = Number(a.spedizione) || 0;
     for (const p of a.prodotti || []) {
-      const costo = Number(p.costo) || 0;
-      const costoPezzo = costo + (base > 0 ? sped * costo / base : 0);
+      const costo = p.regalo ? 0 : Number(p.costo) || 0;
+      const costoPezzo = p.regalo ? 0 : daTot ? daTot.get(p.id) : costo + (base > 0 ? sped * costo / base : 0);
       m.set(`${a.id}:${p.id}`, { acquisto: a, prodotto: p, costoPezzo,
         valoreConf: p.confezione ? (Number(p.confezione.valore) || 0) * qtaDi(p) : 0 });
     }
   }
   return m;
+}
+
+// Stima del totale della fattura: valore di vendita × (quanto hai pagato in media sul valore, dagli ordini con fattura)
+export function stimaTotale(acquisti, prodotti, escludiId) {
+  let pagato = 0, valore = 0;
+  for (const a of acquisti) {
+    if (a.id === escludiId || !(Number(a.totalePagato) > 0)) continue;
+    const v = (a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : valoreVendita(p) * qtaDi(p)), 0);
+    if (v > 0) { pagato += Number(a.totalePagato); valore += v; }
+  }
+  const mio = (prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : valoreVendita(p) * qtaDi(p)), 0);
+  if (!mio) return { totale: 0, rapporto: null };
+  const rapporto = valore > 0 ? pagato / valore : 0.75;  // senza storia: sconto consulente del 25%
+  return { totale: r2(mio * rapporto), rapporto: valore > 0 ? rapporto : null };
 }
 
 // ---------- Costi delle righe vendute ----------
