@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=18";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=18";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=19";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=19";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=18";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=19";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -134,7 +134,7 @@ $("#btn-reset").addEventListener("click", async () => {
 // ---------- Navigazione ----------
 const VISTE = {
   home:     { titolo: "Oggi", fab: ["Nuovo", () => sceltaNuovo()] },
-  acquisti: { titolo: "Acquisti", fab: ["Ordine a Yves Rocher", () => vistaAcquisti === "omaggi" ? apriNuovoOmaggio() : apriAcquisto()] },
+  acquisti: { titolo: "Acquisti", fab: ["Ordine a Yves Rocher", () => vistaAcquisti === "omaggi" ? apriNuovoOmaggio() : vistaAcquisti === "codici" ? apriProdottoCatalogo() : apriAcquisto()] },
   vendite:  { titolo: "Vendite", fab: ["Ordine di una cliente", () => apriVendita()] },
   clienti:  { titolo: "Clienti", fab: ["Nuova cliente", () => apriCliente()] },
   soldi:    { titolo: "Riepilogo", fab: null }
@@ -157,7 +157,7 @@ function render() {
   $("#hello").textContent = vista === "home"
     ? "Ciao! 👋 " + new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" }) : "";
   $("#fab").classList.toggle("hidden", !v.fab || (vista === "acquisti" && vistaAcquisti === "magazzino"));
-  if (v.fab) $("#fab span").textContent = vista === "acquisti" && vistaAcquisti === "omaggi" ? "Nuovo omaggio" : v.fab[0];
+  if (v.fab) $("#fab span").textContent = vista === "acquisti" && vistaAcquisti === "omaggi" ? "Nuovo omaggio" : vista === "acquisti" && vistaAcquisti === "codici" ? "Nuovo prodotto" : v.fab[0];
   const nRich = somma(richiesteDaOrdinare(), x => x.qta);
   const tabAcq = $(".tabbar [data-view=acquisti]"); if (tabAcq) { if (nRich) tabAcq.dataset.badge = nRich; else delete tabAcq.dataset.badge; }
   if (serveConversione()) { $("#fab").classList.add("hidden"); renderConversione(); return; }
@@ -193,6 +193,14 @@ function aggiornaSuggerimenti() {
 }
 const ordiniPerOmaggi = () => [...acquistiComeOrdini(acquisti), ...venditeComeOrdini(vendite)];
 const voceCatalogo = (nome) => catalogo.find(x => chiave(x.nome) === chiave(nome));
+// Codici Yves Rocher: ogni prodotto ha un codice per l'acquisto singolo e uno per il bundle
+const normCodice = (c) => String(c ?? "").replace(/\s+/g, "").toUpperCase();
+const voceDaCodice = (c) => { const k = normCodice(c); if (!k) return null;
+  for (const v of catalogo) { if (normCodice(v.codiceSingolo) === k) return { voce: v, tipo: "singolo" }; if (normCodice(v.codiceBundle) === k) return { voce: v, tipo: "bundle" }; }
+  return null; };
+const codiceDi = (nome, tipo) => { const v = voceCatalogo(nome); return (tipo === "bundle" ? v?.codiceBundle : v?.codiceSingolo) || ""; };
+const pezziBundleDi = (nome) => Number(voceCatalogo(nome)?.pezziBundle) || 0;
+const costoDi = (nome, tipo) => { const v = voceCatalogo(nome); return (tipo === "bundle" ? v?.costoBundle : v?.costo) ?? ""; };
 
 // ---------- Schermata a comparsa ----------
 let sheetChiudi = null;
@@ -285,7 +293,8 @@ function riquadroDaOrdinare() {
   const r = richiesteDaOrdinare(); if (!r.length) return "";
   return `<div class="card da-ordinare-box"><div class="row"><h3>🛒 Da ordinare</h3><span class="count c-blue">${somma(r, x => x.qta)}</span></div>
     <div class="sub" style="margin-bottom:8px">Le cose che ti hanno chiesto le clienti e che non hai ancora ordinato.</div>
-    ${r.map(x => `<div class="money-row"><span><b>${x.qta > 1 ? x.qta + "× " : ""}${esc(x.nome)}</b><br><span class="muted" style="font-size:14px">per ${esc(x.chi.join(", "))}</span></span></div>`).join("")}
+    ${r.map(x => { const cod = codiceDi(x.nome, "singolo"); return `<div class="money-row"><span><b>${x.qta > 1 ? x.qta + "× " : ""}${esc(x.nome)}</b><br><span class="muted" style="font-size:14px">per ${esc(x.chi.join(", "))}</span></span>
+      ${cod ? `<span class="cod-tag">${esc(cod)}</span>` : `<span class="cod-tag manca">senza codice</span>`}</div>`; }).join("")}
     <div class="actions"><button class="primary" data-ordina-ora>🧾 Ordinale a Yves Rocher</button></div></div>`;
 }
 const ricontatti = () => daRicontattare(clienti, venditeComeOrdini(vendite), oggi(), Number(impostazioni.giorniRicontatto) || 0);
@@ -298,11 +307,11 @@ const venditeCliente = (c) => {
 // ACQUISTI (ordini a Yves Rocher)
 // =====================================================================
 function renderAcquisti() {
-  let h = `<div class="segmented seg3"><button data-va="ordini" class="${vistaAcquisti === "ordini" ? "on" : ""}">🧾 Ordini</button>
-    <button data-va="magazzino" class="${vistaAcquisti === "magazzino" ? "on" : ""}">📦 Magazzino</button>
-    <button data-va="omaggi" class="${vistaAcquisti === "omaggi" ? "on" : ""}">🎁 Omaggi</button></div>`;
+  let h = `<div class="segmented seg4">${[["ordini", "🧾", "Ordini"], ["magazzino", "📦", "Magazzino"], ["codici", "🏷️", "Codici"], ["omaggi", "🎁", "Omaggi"]]
+    .map(([k, i, t]) => `<button data-va="${k}" class="${vistaAcquisti === k ? "on" : ""}"><span>${i}</span>${t}</button>`).join("")}</div>`;
   if (vistaAcquisti === "ordini") h += bannerSoglia() + riquadroDaOrdinare() + htmlListaAcquisti();
   else if (vistaAcquisti === "magazzino") h += htmlMagazzino();
+  else if (vistaAcquisti === "codici") h += htmlCodici();
   else h += htmlOmaggi();
   $("#view").innerHTML = h;
   $$("[data-va]").forEach(b => b.addEventListener("click", () => { vistaAcquisti = b.dataset.va; render(); }));
@@ -312,6 +321,7 @@ function renderAcquisti() {
     const g = magazzino(acquisti, vendite)[+b.dataset.vendi]; apriVendita(null, { prodotto: g });
   }));
   if (vistaAcquisti === "omaggi") collegaVistaOmaggi();
+  if (vistaAcquisti === "codici") collegaCodici();
 }
 
 function assegnatiAcquisto(a) {
@@ -335,9 +345,82 @@ function htmlListaAcquisti() {
       ${a.arrivato === false ? `<span class="badge c-blue">🚚 In arrivo da ${plurale(giorniDa(a.data), "giorno", "giorni")}</span>` : `<span class="badge c-green">✓ Arrivato</span>`}
       ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : `📦 ${tot - usati} di ${tot} in magazzino`}</span>` : ""}
       ${(a.omaggiRicevuti || []).length ? `<span class="badge c-gold">🎁 ${somma(a.omaggiRicevuti, x => x.qta)}</span>` : ""}
+      ${(a.prodotti || []).some(p => p.codice) ? `<span class="badge c-blue">🏷️ codici</span>` : ""}
     </div>`;
   }
   return h;
+}
+
+// =====================================================================
+// CODICI PRODOTTO (catalogo)
+// =====================================================================
+let cercaCodici = "";
+function htmlCodici() {
+  const q = chiave(cercaCodici), qc = normCodice(cercaCodici);
+  const lista = [...catalogo].filter(v => v.nome).sort((a, b) => a.nome.localeCompare(b.nome, "it"))
+    .filter(v => !q || chiave(v.nome).includes(q) || normCodice(v.codiceSingolo).includes(qc) || normCodice(v.codiceBundle).includes(qc));
+  const conCodice = catalogo.filter(v => v.codiceSingolo || v.codiceBundle).length;
+  let h = `<p class="section-hint" style="margin-top:0">I codici per ordinare su Yves Rocher. Si salvano da soli quando li scrivi in un ordine; qui puoi aggiungerli o correggerli.</p>
+    <input type="search" id="cerca-cod" class="search" placeholder="🔍 Cerca per nome o codice" value="${esc(cercaCodici)}">
+    <div class="hint" style="margin:-6px 2px 12px">${plurale(conCodice, "prodotto ha", "prodotti hanno")} un codice salvato</div>`;
+  if (!lista.length) return h + `<div class="empty"><div class="e-ico">🏷️</div><b>${q ? "Nessun prodotto trovato" : "Nessun codice ancora"}</b><br>Tocca “Nuovo prodotto” o scrivi i codici quando fai un ordine.</div>`;
+  for (const v of lista) {
+    h += `<div class="card tap cod-card" data-cat="${esc(v.id)}"><div class="row"><h3>${esc(v.nome)}</h3>${v.prezzo ? `<span class="muted num" style="font-size:14px">vendi a ${euro(v.prezzo)}</span>` : ""}</div>
+      <div class="cod-coppia">
+        <button class="cod-pill ${v.codiceSingolo ? "" : "manca"}" data-copia="${esc(v.codiceSingolo || "")}"><small>Singolo</small><b>${esc(v.codiceSingolo || "—")}</b></button>
+        <button class="cod-pill ${v.codiceBundle ? "" : "manca"}" data-copia="${esc(v.codiceBundle || "")}"><small>Bundle${v.pezziBundle ? ` · ${v.pezziBundle} pz` : ""}</small><b>${esc(v.codiceBundle || "—")}</b></button>
+      </div></div>`;
+  }
+  return h;
+}
+function collegaCodici() {
+  $("#cerca-cod")?.addEventListener("input", (e) => { cercaCodici = e.target.value; const pos = e.target.selectionStart; render(); const i = $("#cerca-cod"); i.focus(); i.setSelectionRange(pos, pos); });
+  $$("[data-copia]").forEach(b => b.addEventListener("click", async (e) => {
+    e.stopPropagation(); const c = b.dataset.copia;
+    if (!c) { apriProdottoCatalogo(catalogo.find(v => v.id === b.closest("[data-cat]").dataset.cat)); return; }
+    try { await navigator.clipboard.writeText(c); avviso(`📋 Codice ${c} copiato`); } catch { alert(c); }
+  }));
+  $$("[data-cat]").forEach(el => el.addEventListener("click", () => apriProdottoCatalogo(catalogo.find(v => v.id === el.dataset.cat))));
+}
+function apriProdottoCatalogo(v) {
+  sheetChiudi = null;
+  $("#sheet-body").innerHTML = testataSheet(v ? "Prodotto" : "Nuovo prodotto", false) + `
+    <div class="sh-main"><div class="question">🏷️ ${v ? esc(v.nome) : "Nuovo prodotto"}</div>
+      <div class="yesno">
+        <label style="margin-top:0">Nome del prodotto</label><input id="pc-nome" value="${esc(v?.nome)}" placeholder="Es. Crema mani pelli secche" list="dl-prodotti" autocomplete="off">
+        <div class="grid2"><div><label>Codice singolo</label><input id="pc-sing" class="cod-in" value="${esc(v?.codiceSingolo || "")}" placeholder="Es. 12345" autocapitalize="characters" spellcheck="false" autocomplete="off"></div>
+          <div><label>Codice bundle</label><input id="pc-bund" class="cod-in" value="${esc(v?.codiceBundle || "")}" placeholder="Es. 67890" autocapitalize="characters" spellcheck="false" autocomplete="off"></div></div>
+        <label>Quanti pezzi ci sono in un bundle? (facoltativo)</label><input id="pc-pz" inputmode="numeric" value="${esc(v?.pezziBundle || "")}" placeholder="Es. 3">
+        <div class="grid2"><div><label>Costo singolo</label><input id="pc-costo" inputmode="decimal" value="${esc(inIt(v?.costo ?? ""))}" placeholder="€"></div>
+          <div><label>Costo a pezzo nel bundle</label><input id="pc-costob" inputmode="decimal" value="${esc(inIt(v?.costoBundle ?? ""))}" placeholder="€"></div></div>
+        <label>Prezzo di vendita</label><input id="pc-prezzo" inputmode="decimal" value="${esc(inIt(v?.prezzo ?? ""))}" placeholder="€">
+        <div class="hint">Costo e prezzo li uso solo per proporteli quando fai un ordine: li puoi sempre cambiare.</div>
+      </div>
+      ${v ? `<button class="danger" id="pc-del" style="width:100%;margin-top:6px">🗑 Togli dall'elenco</button>` : ""}
+    </div>
+    <div class="sh-foot"><button class="big primary" id="pc-salva">✓ Salva</button></div>`;
+  $("#sh-back").addEventListener("click", () => chiudiSheet());
+  $("#pc-salva").addEventListener("click", async () => {
+    const nome = $("#pc-nome").value.trim(); if (!nome) return $("#pc-nome").focus();
+    const cs = normCodice($("#pc-sing").value), cb = normCodice($("#pc-bund").value);
+    for (const [c, tipo] of [[cs, "singolo"], [cb, "bundle"]]) {
+      const altro = c && voceDaCodice(c);
+      if (altro && chiave(altro.voce.nome) !== chiave(v?.nome || nome) && !confirm(`Il codice ${c} è già usato per “${altro.voce.nome}” (${altro.tipo}). Lo uso lo stesso?`)) return;
+    }
+    const dati = { nome, codiceSingolo: cs || null, codiceBundle: cb || null, pezziBundle: parseInt($("#pc-pz").value) || null,
+      costo: numIt($("#pc-costo").value) || null, costoBundle: numIt($("#pc-costob").value) || null, prezzo: numIt($("#pc-prezzo").value) || null };
+    const nuovoRef = doc(col("catalogo"), slug(nome));
+    const mod = [{ ref: nuovoRef, prima: v && slug(nome) === v.id ? senzaId(v) : null, dopo: { ...(v && slug(nome) === v.id ? senzaId(v) : {}), ...dati } }];
+    if (v && v.id !== slug(nome)) mod.push({ ref: doc(col("catalogo"), v.id), prima: senzaId(v), dopo: null });   // nome cambiato
+    await scriviConAnnulla(mod, v ? "✓ Prodotto aggiornato" : "🏷️ Prodotto aggiunto");
+    chiudiSheet(true);
+  });
+  $("#pc-del")?.addEventListener("click", async () => {
+    if (!confirm(`Togliere “${v.nome}” dall'elenco dei codici? Gli ordini già fatti non cambiano.`)) return;
+    await scriviConAnnulla([{ ref: doc(col("catalogo"), v.id), prima: senzaId(v), dopo: null }], "🗑 Tolto dall'elenco");
+    chiudiSheet(true);
+  });
+  apriSheet();
 }
 
 function htmlMagazzino() {
@@ -359,8 +442,9 @@ function htmlMagazzino() {
 function apriAcquisto(a, opz = {}) {
   const acq = a ? structuredClone(a) : { data: oggi(), numeroOrdine: "", note: "", arrivato: false, spedizione: 0, omaggiRicevuti: [], prodotti: [] };
   acq.prodotti ||= []; acq.omaggiRicevuti ||= [];
-  acq.prodotti.forEach(p => { p.id ||= nuovoId(); });
+  acq.prodotti.forEach(p => { p.id ||= nuovoId(); p.tipoAcquisto ||= "singolo"; if (p.codice === undefined) p.codice = codiceDi(p.nome, p.tipoAcquisto); p._cod = { [p.tipoAcquisto]: p.codice }; });
   const nuovoIdAcq = a?.id || nuovoId();
+  let tipoNuovo = "singolo";
   let modificato = false;
   const segna = () => { modificato = true; };
   sheetChiudi = () => !modificato || confirm("Uscire senza salvare? Le modifiche andranno perse.");
@@ -383,7 +467,7 @@ function apriAcquisto(a, opz = {}) {
     for (const x of richiesteTutte().filter(x => scelte.has(x.k))) {
       let p = acq.prodotti.find(p => p._daRichieste && chiave(p.nome) === chiave(x.r.nome));
       if (p) p.qta = qtaDi(p) + qtaDi(x.r);
-      else { p = { id: nuovoId(), nome: x.r.nome, qta: qtaDi(x.r), costo: voceCatalogo(x.r.nome)?.costo ?? "", _daRichieste: true }; acq.prodotti.push(p); }
+      else { p = { id: nuovoId(), nome: x.r.nome, qta: qtaDi(x.r), costo: costoDi(x.r.nome, "singolo"), tipoAcquisto: "singolo", codice: codiceDi(x.r.nome, "singolo"), _daRichieste: true }; acq.prodotti.push(p); }
       collegamenti.push({ venditaId: x.v.id, rigaId: x.r.id, prodottoId: p.id });
     }
     scelte.clear(); segna();
@@ -406,7 +490,8 @@ function apriAcquisto(a, opz = {}) {
           <div class="yn-b" style="margin-top:10px"><button id="ric-tutte">Seleziona tutte</button>
             <button class="primary" id="ric-agg" ${scelte.size ? "" : "disabled style='opacity:.4'"}>＋ Aggiungi ${scelte.size || ""}</button></div></div>` : ""}
 
-        <div class="gift-sub" style="margin-top:20px">🛍️ Prodotti comprati</div>
+        <div class="row" style="margin-top:20px"><div class="gift-sub" style="margin:0">🛍️ Prodotti comprati</div>
+          ${acq.prodotti.length ? `<button class="pill c-blue" id="copia-codici">📋 Copia codici</button>` : ""}</div>
         ${acq.prodotti.map((p, i) => { const per = assegnatiA(p.id); return `<div class="card prod-card">
           <div class="row"><b>${p.confezione ? "🎄 " : ""}${esc(p.nome)}</b><button class="x" data-xp="${i}" aria-label="Togli">×</button></div>
           ${per.length ? `<div class="per-chi">→ ${per.map(x => `${esc(nomeVendita(x.v))}${x.qta > 1 ? ` (${x.qta})` : ""}`).join(", ")}</div>` : ""}
@@ -415,10 +500,18 @@ function apriAcquisto(a, opz = {}) {
             <div><label>Costo ${p.confezione ? "confezione" : "a pezzo"}</label><input class="costo-in" data-pc="${i}" inputmode="decimal" value="${esc(inIt(p.costo))}" placeholder="€"></div>
           </div>
           ${p.confezione ? `<label>Valore a catalogo dei prodotti dentro (una confezione)</label><input data-pv="${i}" inputmode="decimal" value="${esc(inIt(p.confezione.valore))}" placeholder="€">` : ""}
+          <div class="cod-row">
+            ${p.confezione ? "" : `<div class="mini-seg"><button data-ptipo="${i}" data-t="singolo" class="${p.tipoAcquisto !== "bundle" ? "on" : ""}">Singolo</button><button data-ptipo="${i}" data-t="bundle" class="${p.tipoAcquisto === "bundle" ? "on" : ""}">Bundle</button></div>`}
+            <input class="cod-in" data-pcod="${i}" value="${esc(p.codice || "")}" placeholder="🏷️ Codice" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          </div>
+          ${p.tipoAcquisto === "bundle" && pezziBundleDi(p.nome) ? `<div class="hint" style="margin:4px 0 0">1 bundle = ${pezziBundleDi(p.nome)} pezzi${qtaDi(p) % pezziBundleDi(p.nome) ? "" : ` · stai ordinando ${qtaDi(p) / pezziBundleDi(p.nome)} bundle`}</div>` : ""}
         </div>`; }).join("") || `<div class="hint" style="margin:0 0 10px">Nessun prodotto: aggiungili qui sotto.</div>`}
 
         <div class="add-box">
-          <input id="np-nome" list="dl-prodotti" placeholder="Nome del prodotto" autocomplete="off">
+          <input id="np-nome" list="dl-prodotti" placeholder="Nome del prodotto o codice" autocomplete="off">
+          <div class="cod-row" style="margin:0">
+            <div class="mini-seg"><button data-ntipo-acq="singolo" class="${tipoNuovo === "singolo" ? "on" : ""}">Singolo</button><button data-ntipo-acq="bundle" class="${tipoNuovo === "bundle" ? "on" : ""}">Bundle</button></div>
+            <input class="cod-in" id="np-cod" placeholder="🏷️ Codice" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
           <div class="three"><input id="np-costo" inputmode="decimal" placeholder="Costo €"><input id="np-qta" inputmode="numeric" value="1" aria-label="Quanti">
             <button class="c-orange" id="np-add">＋</button></div>
           <button class="chip ${nuovaConf ? "sel" : ""}" id="np-conf" style="justify-self:start">🎄 È un calendario o cofanetto</button>
@@ -462,6 +555,20 @@ function apriAcquisto(a, opz = {}) {
     $("#ric-agg")?.addEventListener("click", () => { if (!scelte.size) return; aggiungiRichieste(); disegna(); avviso("🛒 Aggiunte: scrivi quanto le hai pagate"); });
     $$("[data-pc]").forEach(i => i.addEventListener("input", () => { acq.prodotti[+i.dataset.pc].costo = i.value; segna(); aggiornaTotale(); }));
     $$("[data-pv]").forEach(i => i.addEventListener("input", () => { acq.prodotti[+i.dataset.pv].confezione.valore = numIt(i.value); segna(); }));
+    $$("[data-pcod]").forEach(i => i.addEventListener("input", () => { const p = acq.prodotti[+i.dataset.pcod]; p.codice = normCodice(i.value); (p._cod ||= {})[p.tipoAcquisto] = p.codice; segna(); }));
+    $$("[data-ptipo]").forEach(b => b.addEventListener("click", () => {
+      const p = acq.prodotti[+b.dataset.ptipo]; if (p.tipoAcquisto === b.dataset.t) return;
+      p._cod ||= {}; p._cod[p.tipoAcquisto] = p.codice;          // tengo da parte il codice dell'altro tipo
+      const costoAuto = !numIt(p.costo) || numIt(p.costo) === numIt(costoDi(p.nome, p.tipoAcquisto));
+      p.tipoAcquisto = b.dataset.t;
+      p.codice = p._cod[p.tipoAcquisto] || codiceDi(p.nome, p.tipoAcquisto) || "";
+      if (costoAuto && costoDi(p.nome, p.tipoAcquisto) !== "") p.costo = costoDi(p.nome, p.tipoAcquisto);
+      const pb = pezziBundleDi(p.nome);
+      if (p.tipoAcquisto === "bundle" && pb && qtaDi(p) < pb) p.qta = pb;
+      segna(); disegna();
+      if (!p.codice) avviso(`Scrivi il codice ${p.tipoAcquisto === "bundle" ? "bundle" : "singolo"}: la prossima volta lo ricordo io`);
+    }));
+    $("#copia-codici")?.addEventListener("click", copiaCodici);
     $$("[data-pq]").forEach(b => b.addEventListener("click", () => {
       const p = acq.prodotti[+b.dataset.pq], minimo = Math.max(1, somma(assegnatiA(p.id), x => x.qta));
       const nuova = qtaDi(p) + Number(b.dataset.d);
@@ -476,21 +583,35 @@ function apriAcquisto(a, opz = {}) {
       if (a?.prodotti?.some(x => x.id === p.id)) scollegati.add(p.id);
       segna(); disegna();
     }));
-    const nomeIn = $("#np-nome"), costoIn = $("#np-costo");
-    nomeIn.addEventListener("change", () => { const c = voceCatalogo(nomeIn.value)?.costo; if (c && !costoIn.value) costoIn.value = inIt(c); });
+    const nomeIn = $("#np-nome"), costoIn = $("#np-costo"), codIn = $("#np-cod");
+    const riempiDaCatalogo = () => {
+      const daCod = voceDaCodice(nomeIn.value);          // scritto un codice al posto del nome
+      if (daCod) { nomeIn.value = daCod.voce.nome; tipoNuovo = daCod.tipo; $$("[data-ntipo-acq]").forEach(x => x.classList.toggle("on", x.dataset.ntipoAcq === tipoNuovo)); }
+      const c = costoDi(nomeIn.value, tipoNuovo);
+      if (c !== "" && !costoIn.value) costoIn.value = inIt(c);
+      codIn.value = codiceDi(nomeIn.value, tipoNuovo) || codIn.value;
+      if (tipoNuovo === "bundle" && pezziBundleDi(nomeIn.value)) $("#np-qta").value = pezziBundleDi(nomeIn.value);
+    };
+    nomeIn.addEventListener("change", riempiDaCatalogo);
+    nomeIn.addEventListener("keydown", e => { if (e.key === "Enter") { riempiDaCatalogo(); costoIn.focus(); } });
+    $$("[data-ntipo-acq]").forEach(b => b.addEventListener("click", () => {
+      tipoNuovo = b.dataset.ntipoAcq; $$("[data-ntipo-acq]").forEach(x => x.classList.toggle("on", x === b));
+      if (nomeIn.value.trim()) { codIn.value = codiceDi(nomeIn.value, tipoNuovo); const c = costoDi(nomeIn.value, tipoNuovo); if (c !== "") costoIn.value = inIt(c);
+        if (tipoNuovo === "bundle" && pezziBundleDi(nomeIn.value)) $("#np-qta").value = pezziBundleDi(nomeIn.value); }
+    }));
     $("#np-conf").addEventListener("click", () => {
-      const salva = { n: nomeIn.value, c: costoIn.value, q: $("#np-qta").value };
-      nuovaConf = !nuovaConf; disegna(); $("#np-nome").value = salva.n; $("#np-costo").value = salva.c; $("#np-qta").value = salva.q;
+      const salva = { n: nomeIn.value, c: costoIn.value, q: $("#np-qta").value, k: codIn.value };
+      nuovaConf = !nuovaConf; disegna(); $("#np-nome").value = salva.n; $("#np-costo").value = salva.c; $("#np-qta").value = salva.q; $("#np-cod").value = salva.k;
     });
     const aggiungi = () => {
       const nome = nomeIn.value.trim(); if (!nome) { nomeIn.focus(); return; }
-      const p = { id: nuovoId(), nome, qta: Math.max(1, parseInt($("#np-qta").value) || 1), costo: costoIn.value };
+      const p = { id: nuovoId(), nome, qta: Math.max(1, parseInt($("#np-qta").value) || 1), costo: costoIn.value, tipoAcquisto: nuovaConf ? "singolo" : tipoNuovo, codice: normCodice(codIn.value) };
       if (nuovaConf) {
         const val = numIt($("#np-valore").value);
         if (!val) { $("#np-valore").focus(); return avviso("Scrivi quanto valgono a catalogo i prodotti dentro"); }
         p.confezione = { valore: val };
       }
-      acq.prodotti.push(p); nuovaConf = false; segna(); disegna(); $("#np-nome").focus();
+      acq.prodotti.push(p); nuovaConf = false; tipoNuovo = "singolo"; segna(); disegna(); $("#np-nome").focus();
     };
     $("#np-add").addEventListener("click", aggiungi);
     costoIn.addEventListener("keydown", e => { if (e.key === "Enter") aggiungi(); });
@@ -498,6 +619,20 @@ function apriAcquisto(a, opz = {}) {
     collegaOmaggi(acq.omaggiRicevuti, "oa", disegna, segna);
     $("#a-del")?.addEventListener("click", elimina);
     $("#a-salva").addEventListener("click", salva);
+  }
+
+  // Lista da copiare per fare l'ordine sul sito Yves Rocher
+  async function copiaCodici() {
+    const righe = acq.prodotti.map(p => {
+      const pb = p.tipoAcquisto === "bundle" ? pezziBundleDi(p.nome) : 0;
+      const quanti = pb && qtaDi(p) % pb === 0 ? qtaDi(p) / pb : qtaDi(p);
+      return `${p.codice || "(manca il codice)"}  x${quanti}  ${p.nome}${p.tipoAcquisto === "bundle" ? " (bundle)" : ""}`;
+    });
+    const testo = `Ordine Yves Rocher ${dataIt(acq.data)}\n` + righe.join("\n");
+    try { await navigator.clipboard.writeText(testo); avviso(`📋 Copiati ${plurale(righe.length, "codice", "codici")}`); }
+    catch { alert(testo); }
+    const mancano = acq.prodotti.filter(p => !p.codice).length;
+    if (mancano) setTimeout(() => avviso(`⚠️ ${plurale(mancano, "prodotto è", "prodotti sono")} senza codice`), 2600);
   }
 
   // vendite da aggiornare: collegare le richieste, scollegare i prodotti tolti
@@ -521,7 +656,9 @@ function apriAcquisto(a, opz = {}) {
   async function salva() {
     if (!acq.prodotti.length) return avviso("Aggiungi almeno un prodotto");
     if (acq.prodotti.some(p => !numIt(p.costo)) && !confirm("Alcuni prodotti non hanno il costo: il guadagno non sarà giusto finché non lo scrivi. Salvo lo stesso?")) return;
-    const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: numIt(p.costo), ...(p.confezione ? { confezione: { valore: numIt(p.confezione.valore) } } : {}) }));
+    const codiciExtra = new Map(acq.prodotti.map(p => [p.id, { ...(p._cod || {}), [p.tipoAcquisto]: p.codice }]));
+    const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: numIt(p.costo), tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice),
+      ...(p.confezione ? { confezione: { valore: numIt(p.confezione.valore) } } : {}) }));
     const dati = { ...senzaId(acq), prodotti, spedizione: numIt(acq.spedizione), arrivato: acq.arrivato !== false,
       arrivatoIl: acq.arrivato !== false ? (acq.arrivatoIl || oggi()) : null, aggiornato: new Date().toISOString() };
     const soglia = sogliaAcquisti(), mese = String(dati.data || "").slice(0, 7);
@@ -533,7 +670,15 @@ function apriAcquisto(a, opz = {}) {
     const mod = [{ ref: refAcquisto(nuovoIdAcq), prima: a ? senzaId(a) : null, dopo: dati }, ...modificheVendite(nuovoIdAcq, prodotti)];
     $("#a-salva").disabled = true;
     await scriviConAnnulla(mod, null);
-    for (const p of prodotti) if (p.costo && !p.confezione) setDoc(doc(col("catalogo"), slug(p.nome)), { nome: p.nome, costo: p.costo }, { merge: true });
+    // ricordo costo e codici per la prossima volta
+    for (const p of prodotti) {
+      const agg = { nome: p.nome };
+      if (p.costo && !p.confezione) agg[p.tipoAcquisto === "bundle" ? "costoBundle" : "costo"] = p.costo;
+      const cod = codiciExtra.get(p.id) || {};
+      if (normCodice(cod.singolo)) agg.codiceSingolo = normCodice(cod.singolo);
+      if (normCodice(cod.bundle)) agg.codiceBundle = normCodice(cod.bundle);
+      if (Object.keys(agg).length > 1) setDoc(doc(col("catalogo"), slug(p.nome)), agg, { merge: true });
+    }
     chiudiSheet(true);
     avviso(a ? "✓ Ordine aggiornato" : collegamenti.length ? `✓ Salvato: ${plurale(collegamenti.length, "richiesta collegata", "richieste collegate")}` : "✓ Ordine salvato");
   }
@@ -1449,7 +1594,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v18</p>`;
+    <p class="versione" style="text-align:center">v19</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });

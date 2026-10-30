@@ -329,3 +329,21 @@ details.storia summary { padding: 10px 0 4px; font-size: 15px; font-weight: 600;
 .es-riga { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 15px; }
 .es-riga:first-child { border-top: 0; }
 .es-no b { color: var(--red); }
+
+/* ---------- codici prodotto ---------- */
+.segmented.seg4 { grid-template-columns: repeat(4, 1fr); margin-top: 0; }
+.segmented.seg4 button { padding: 8px 2px; font-size: 13px; display: grid; justify-items: center; gap: 1px; }
+.segmented.seg4 button span { font-size: 18px; }
+.cod-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.cod-row .cod-in { flex: 1; min-width: 0; }
+.cod-in { font-family: ui-monospace, Menlo, monospace; letter-spacing: .04em; font-weight: 700; }
+.mini-seg { display: inline-flex; background: var(--line); border-radius: 12px; padding: 3px; flex: none; }
+.mini-seg button { padding: 8px 10px; font-size: 14px; border-radius: 9px; background: none; color: var(--muted); }
+.mini-seg button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+.cod-tag { font-family: ui-monospace, Menlo, monospace; font-weight: 700; font-size: 14px; background: var(--card); color: var(--blue); border-radius: 8px; padding: 4px 8px; white-space: nowrap; align-self: center; }
+.cod-tag.manca { font-family: inherit; color: var(--muted); font-weight: 500; font-size: 13px; }
+.cod-coppia { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.cod-pill { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 14px; background: var(--blue-soft); color: var(--blue); }
+.cod-pill small { font-size: 12px; font-weight: 600; opacity: .8; }
+.cod-pill b { font-family: ui-monospace, Menlo, monospace; font-size: 17px; letter-spacing: .04em; }
+.cod-pill.manca { background: var(--bg); color: var(--muted); }
