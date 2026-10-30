@@ -287,3 +287,39 @@ details.storia summary { padding: 10px 0 4px; font-size: 15px; font-weight: 600;
 .spunta.on .box { background: var(--green); border-color: var(--green); color: #fff; }
 .div-item.da-fare { border-left-color: var(--gold); }
 .div-item .chip.sel { background: var(--green); color: #fff; }
+
+/* ---------- v16: acquisti e vendite ---------- */
+.segmented.seg3 { grid-template-columns: repeat(3, 1fr); margin-top: 0; }
+.big-choice { display: flex; gap: 14px; align-items: center; text-align: left; padding: 18px; border-radius: 20px; font-size: 18px; }
+.big-choice small { font-weight: 500; opacity: .85; font-size: 14px; }
+.big-choice .bc-ico { font-size: 34px; }
+.wide-tile { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-weight: 700; }
+.wide-tile b { font-size: 20px; }
+.prod-card { padding: 12px 14px; }
+.prod-card .row b { font-size: 17px; }
+.prod-grid { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: end; }
+.prod-grid label { margin-top: 6px; }
+.costo-in { text-align: right; font-weight: 700; }
+.per-chi { font-size: 14px; color: var(--blue); font-weight: 600; margin-top: 2px; }
+.add-box .three { display: grid; grid-template-columns: 1fr 70px 56px; gap: 8px; }
+.two-col { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
+.riga-ven { flex-wrap: nowrap; }
+.riga-ven .i-name { font-size: 15px; }
+.tag-ordinare { display: inline-block; font-size: 12px; font-weight: 700; color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: 2px 8px; }
+.stepper.mini button { width: 32px; height: 32px; font-size: 17px; }
+.stepper.mini b { min-width: 22px; font-size: 16px; }
+.spunta.disab { opacity: .6; cursor: default; }
+.spunta.disab .box { font-size: 14px; }
+.richieste { border: 2px solid var(--blue-soft); }
+.mese-riga { grid-template-columns: 58px 1fr auto; }
+.mr-sub { display: block; font-size: 12px; color: var(--muted); font-weight: 500; margin-top: 4px; }
+
+/* ---------- v17 ---------- */
+.banner.rosso { background: var(--pink-soft); color: var(--red); }
+.banner b { font-weight: 800; }
+.da-ordinare-box { border: 2px solid var(--blue); background: var(--blue-soft); }
+.da-ordinare-box .money-row { border-color: rgba(47,111,224,.18); }
+.soglia-card .row { font-weight: 600; }
+.tabbar button { position: relative; }
+.tabbar button[data-badge]::after { content: attr(data-badge); position: absolute; top: 2px; left: calc(50% + 8px); min-width: 18px; height: 18px;
+  padding: 0 5px; border-radius: 9px; background: var(--blue); color: #fff; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
