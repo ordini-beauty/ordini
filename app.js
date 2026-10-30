@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=21";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=21";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=24";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=24";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=21";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=24";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -389,9 +389,9 @@ function bannerSoglia(mese = oggi().slice(0, 7)) {
     : `A ${nome} hai già speso <b>${euro(speso)}</b> in acquisti: la soglia è ${euro(soglia)}`}
     <div class="progress" style="margin-top:8px"><span style="width:${Math.min(100, Math.round(perc * 100))}%;background:${perc >= 1 ? "var(--red)" : "var(--gold)"}"></span></div></div>`;
 }
-// ---------- Livelli: in base a quanto spende in acquisti nel periodo ----------
-const LIVELLI_BASE = { periodo: "mese", soglie: { base: 150, expert: 750, prestige: 1000 } };
-const prefLivelli = () => { const l = impostazioni.livelli || {}; return { periodo: l.periodo || LIVELLI_BASE.periodo, soglie: { ...LIVELLI_BASE.soglie, ...(l.soglie || {}) } }; };
+// ---------- Livelli: in base a quanto vende alle clienti nel periodo ----------
+const LIVELLI_BASE = { periodo: "trimestre", soglie: { base: 150, expert: 750, prestige: 1000 } };
+const prefLivelli = () => { const l = impostazioni.livelli || {}; return { periodo: "trimestre", soglie: { ...LIVELLI_BASE.soglie, ...(l.soglie || {}) } }; };
 const NOMI_PERIODO = { mese: "questo mese", trimestre: "questo trimestre", anno: "quest'anno", sempre: "da sempre" };
 function periodoDi(dataIso, periodo) {        // chiave del periodo che contiene la data
   const d = String(dataIso || ""), y = d.slice(0, 4), m = Number(d.slice(5, 7));
@@ -402,27 +402,72 @@ function nomePeriodo(chiaveP, periodo) {
   if (periodo === "trimestre") { const [y, t] = chiaveP.split("-T"); return `${["gennaio–marzo", "aprile–giugno", "luglio–settembre", "ottobre–dicembre"][t - 1]} ${y}`; }
   return periodo === "anno" ? chiaveP : "da sempre";
 }
+function fineTrimestre(chiaveT) {          // "2026-T4" -> "2026-12-31"
+  const [y, t] = chiaveT.split("-T").map(Number);
+  return new Date(Date.UTC(y, t * 3, 0)).toISOString().slice(0, 10);
+}
+const giorniTra = (a, b) => Math.round((Date.parse(b + "T00:00Z") - Date.parse(a + "T00:00Z")) / 86400000);
+const VICINO = 0.25;   // "vicina" al livello dopo = le manca meno del 25% della soglia
 function statoLivello(dataRif = oggi()) {
   const { periodo, soglie } = prefLivelli(), k = periodoDi(dataRif, periodo);
-  const speso = Math.round(somma(acquisti.filter(a => periodoDi(a.data, periodo) === k), totaleAcquisto) * 100) / 100;
+  const indice = indiceProdotti(acquisti);   // tutti gli ordini (clienti e "Per me") per data dell'ordine, pagati o no
+  const valore = (v) => { const c = calcolaVendita(v, indice); return isMia(v) ? Math.max(c.totale, c.spesoPerMe) : c.totale; };
+  const speso = Math.round(somma(vendite.filter(v => periodoDi(v.data, periodo) === k), valore) * 100) / 100;
   const scala = [["Base", soglie.base, "lv-base"], ["Expert", soglie.expert, "lv-expert"], ["Prestige", soglie.prestige, "lv-prestige"]];
   let i = -1; scala.forEach(([, da], j) => { if (speso >= da) i = j; });
   const prossimo = scala[i + 1] || null;
   return { periodo, chiave: k, nomePeriodo: nomePeriodo(k, periodo), speso, scala, indice: i,
-    nome: i >= 0 ? scala[i][0] : null, classe: i >= 0 ? scala[i][2] : "lv-nessuno", prossimo, mancano: prossimo ? Math.round((prossimo[1] - speso) * 100) / 100 : 0 };
+    nome: i >= 0 ? scala[i][0] : null, classe: i >= 0 ? scala[i][2] : "lv-nessuno", prossimo, mancano: prossimo ? Math.round((prossimo[1] - speso) * 100) / 100 : 0,
+    fine: fineTrimestre(k), corrente: k === periodoDi(oggi(), periodo), giorniFine: giorniTra(oggi(), fineTrimestre(k)) };
+}
+// Chi e cosa rende di più nel trimestre (per guadagno)
+function classificaTrimestre(dataRif) {
+  const k = periodoDi(dataRif, "trimestre"), indice = indiceProdotti(acquisti), cl = new Map(), pr = new Map();
+  for (const v of vendite) {
+    if (isMia(v) || periodoDi(v.data, "trimestre") !== k) continue;
+    const c = calcolaVendita(v, indice);
+    if (v.clienteId !== STORICO) { const x = cl.get(v.clienteId) || { nome: nomeVendita(v), venduto: 0, guadagno: 0, n: 0 };
+      x.venduto += c.totale; x.guadagno += c.guadagno; x.n++; cl.set(v.clienteId, x); }
+    const lordo = somma(v.righe || [], r => (Number(r.prezzo) || 0) * qtaDi(r)), f = lordo > 0 ? c.totale / lordo : 1;
+    for (const r of v.righe || []) {
+      const nome = String(r.nome || "").trim(); if (!nome) continue;
+      const kk = nome.toLowerCase(), x = pr.get(kk) || { nome, pezzi: 0, venduto: 0, guadagno: 0, senzaCosto: false };
+      const ric = (Number(r.prezzo) || 0) * qtaDi(r) * f, co = costoRiga(r, indice);
+      x.pezzi += qtaDi(r); x.venduto += ric; if (co === null) x.senzaCosto = true; else x.guadagno += ric - co;
+      pr.set(kk, x);
+    }
+  }
+  const ord = (m) => [...m.values()].sort((a, b) => b.guadagno - a.guadagno || b.venduto - a.venduto).slice(0, 5);
+  return { nome: nomePeriodo(k, "trimestre"), clienti: ord(cl), prodotti: ord(pr) };
+}
+function htmlClassifica(dataRif) {
+  const C = classificaTrimestre(dataRif);
+  if (!C.clienti.length && !C.prodotti.length) return "";
+  const riga = (i, nome, sub, val) => `<div class="top-riga"><span class="top-pos">${i + 1}</span><span class="top-nome"><b>${esc(nome)}</b><span class="sub">${sub}</span></span><b class="num top-val">${val}</b></div>`;
+  const gColore = (g) => `<span style="color:${g >= 0 ? "var(--green)" : "var(--red)"}">${euro(Math.round(g * 100) / 100)}</span>`;
+  return `<div class="section"><h2>I migliori</h2><span class="count c-blue" style="text-transform:capitalize">${esc(C.nome)}</span></div>
+    ${C.clienti.length ? `<div class="card"><div class="livello-eti">Clienti · per guadagno</div>
+      ${C.clienti.map((x, i) => riga(i, x.nome, `${x.n} ${x.n === 1 ? "ordine" : "ordini"} · venduto ${euro(Math.round(x.venduto * 100) / 100)}`, gColore(x.guadagno))).join("")}</div>` : ""}
+    ${C.prodotti.length ? `<div class="card"><div class="livello-eti">Prodotti · per guadagno</div>
+      ${C.prodotti.map((x, i) => riga(i, x.nome, `${x.pezzi} ${x.pezzi === 1 ? "pezzo" : "pezzi"} · venduto ${euro(Math.round(x.venduto * 100) / 100)}${x.senzaCosto ? " · in parte da ordinare" : ""}`, gColore(x.guadagno))).join("")}
+      <div class="hint" style="margin-top:8px">Il guadagno conta solo i pezzi di cui conosci già il costo.</div></div>` : ""}`;
 }
 function htmlLivello(dataRif, compatto) {
   const L = statoLivello(dataRif), [b, e, p] = L.scala.map(x => x[1]);
+  const vicina = L.corrente && L.prossimo && L.giorniFine <= 21 && L.mancano <= L.prossimo[1] * VICINO;
   const riemp = (da, a) => Math.max(0, Math.min(100, Math.round((L.speso - da) / (a - da) * 100)));
   const segmenti = [riemp(b, e), riemp(e, p), riemp(p, p * 1.5)];
   return `<div class="card livello-card ${L.classe}">
     <div class="livello-testa"><div><div class="livello-eti">Livello · ${esc(L.nomePeriodo)}</div>
       <div class="livello-nome">${L.nome || "Nessun livello"}</div></div>
-      <div style="text-align:right"><div class="livello-eti">Acquisti</div><div class="num" style="font:600 22px var(--serif)">${euro(L.speso)}</div></div></div>
+      <div style="text-align:right"><div class="livello-eti">Vendite</div><div class="num" style="font:600 22px var(--serif)">${euro(L.speso)}</div></div></div>
     <div class="livello-scala">${segmenti.map(x => `<div><span style="width:${x}%"></span></div>`).join("")}</div>
     <div class="livello-tacche">${L.scala.map(([n, da], j) => `<span class="${j <= L.indice ? "on" : ""}">${n} · ${euro(da).replace(",00", "")}</span>`).join("")}</div>
-    ${compatto ? "" : `<div class="hint" style="margin-top:10px">${L.prossimo ? `Mancano <b>${euro(L.mancano)}</b> di acquisti per arrivare al livello ${L.prossimo[0]}.` : "Hai raggiunto il livello più alto."}</div>`}
-    ${compatto && L.prossimo ? `<div class="hint" style="margin-top:8px">Mancano ${euro(L.mancano)} al livello ${L.prossimo[0]}</div>` : ""}
+    ${vicina
+      ? `<div class="livello-avviso">${L.giorniFine === 0 ? "Oggi è l'ultimo giorno del trimestre" : `Mancano ${L.giorniFine} ${L.giorniFine === 1 ? "giorno" : "giorni"} alla fine del trimestre`}: con <b>${euro(L.mancano)}</b> di vendite arrivi a ${L.prossimo[0]}.</div>`
+      : L.corrente && !compatto ? `<div class="hint" style="margin-top:8px">Il trimestre finisce il ${dataLunga(L.fine)} (tra ${L.giorniFine} giorni).</div>` : ""}
+    ${compatto || vicina ? "" : `<div class="hint" style="margin-top:10px">${L.prossimo ? `Mancano <b>${euro(L.mancano)}</b> di vendite per arrivare al livello ${L.prossimo[0]}.` : "Hai raggiunto il livello più alto."}</div>`}
+    ${compatto && L.prossimo && !vicina ? `<div class="hint" style="margin-top:8px">Mancano ${euro(L.mancano)} al livello ${L.prossimo[0]}</div>` : ""}
   </div>`;
 }
 
@@ -1860,6 +1905,8 @@ function renderSoldi() {
       ${tile("c-gold", "", merce, "merce in casa (oggi)")}
     </div>
 
+    ${htmlClassifica(meseSel + "-15")}
+
     <div class="section"><h2>Da sempre</h2></div>
     <div class="card">
       <div class="money-row"><span>Speso in acquisti</span><b class="num">${euro(tot.spesoAcquisti)}</b></div>
@@ -1884,10 +1931,7 @@ function renderSoldi() {
     <div class="section"><h2>Impostazioni</h2></div>
     <div class="yesno" id="box-notifiche"><div class="yn-q">Notifiche</div><div class="hint" style="margin:0">Controllo…</div></div>
     <div class="yesno"><div class="yn-q">Livelli</div>
-      <div class="hint" style="margin:-4px 0 10px">Il livello dipende da quanto spendi in acquisti Yves Rocher nel periodo.</div>
-      <label style="margin-top:0">Periodo</label>
-      <div class="chips small-chips">${[["mese", "Mese"], ["trimestre", "Trimestre"], ["anno", "Anno"], ["sempre", "Da sempre"]].map(([k, t]) =>
-        `<button class="chip ${prefLivelli().periodo === k ? "sel" : ""}" data-lv-periodo="${k}">${t}</button>`).join("")}</div>
+      <div class="hint" style="margin:-4px 0 10px">Il livello si calcola per trimestre (gennaio–marzo, aprile–giugno, luglio–settembre, ottobre–dicembre) su tutti gli ordini: quelli delle clienti dal giorno in cui te li chiedono, più i tuoi "Per me".</div>
       <div class="livello-soglie">${[["base", "Base da"], ["expert", "Expert da"], ["prestige", "Prestige da"]].map(([k, t]) =>
         `<div><label>${t}</label><input data-lv-soglia="${k}" inputmode="decimal" value="${esc(inIt(prefLivelli().soglie[k]))}"></div>`).join("")}</div>
       <button class="c-blue" id="lv-salva" style="width:100%;margin-top:10px">Salva livelli</button></div>
@@ -1907,13 +1951,12 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v21</p>`;
+    <p class="versione" style="text-align:center">v24</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
   disegnaNotifiche();
   $$("[data-giorni]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { giorniRicontatto: Number(b.dataset.giorni) }, { merge: true })));
-  $$("[data-lv-periodo]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { livelli: { ...prefLivelli(), periodo: b.dataset.lvPeriodo } }, { merge: true })));
   $("#lv-salva").addEventListener("click", () => {
     const soglie = Object.fromEntries($$("[data-lv-soglia]").map(i => [i.dataset.lvSoglia, numIt(i.value)]));
     if (!(soglie.base < soglie.expert && soglie.expert < soglie.prestige)) return avviso("Le soglie devono crescere: Base < Expert < Prestige");
@@ -2315,7 +2358,15 @@ function calcolaPromemoria() {
   const L = statoLivello();
   if (p.livelli !== false && L.nome) { const ora = new Date(); ora.setMinutes(0, 0, 0);
     lista.push({ id: `livello:${L.chiave}:${L.nome}`, quando: ora.getTime(), titolo: `Livello ${L.nome} raggiunto`,
-      testo: `Hai ${euro(L.speso)} di acquisti ${L.nomePeriodo === "da sempre" ? "in tutto" : "nel periodo " + L.nomePeriodo}.${L.prossimo ? ` Mancano ${euro(L.mancano)} al livello ${L.prossimo[0]}.` : ""}` }); }
+      testo: `Hai ${euro(L.speso)} di vendite ${L.nomePeriodo === "da sempre" ? "in tutto" : "nel periodo " + L.nomePeriodo}.${L.prossimo ? ` Mancano ${euro(L.mancano)} al livello ${L.prossimo[0]}.` : ""}` }); }
+  // vicina al livello successivo verso fine trimestre
+  if (p.livelli !== false && L.prossimo && L.mancano <= L.prossimo[1] * VICINO) {
+    for (const meno of [21, 14, 7, 3]) {
+      const g = piu(L.fine, -meno); if (g < oggiIso) continue;
+      lista.push({ id: `vicino:${L.chiave}:${L.prossimo[0]}:${meno}`, quando: quando(g), titolo: `Sei vicina al livello ${L.prossimo[0]}`,
+        testo: `Mancano ${meno} giorni alla fine del trimestre e ti servono circa ${euro(L.mancano)} di vendite. Apri l'app per il dato aggiornato.` });
+    }
+  }
   // soglia superata nel mese corrente: una notifica sola (il Worker non la rimanda)
   const sg = sogliaAcquisti(), meseOra = oggiIso.slice(0, 7), spesoOra = spesoMese(meseOra);
   if (p.soglia !== false && sg && spesoOra >= sg) {

@@ -392,3 +392,11 @@ details.storia summary { padding: 10px 0 4px; font-size: 14px; font-weight: 600;
 @keyframes scendi { from { transform: translateY(-16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .toast button { background: rgba(255,255,255,.12); color: #fff; padding: 8px 12px; flex: none; }
 .livello-soglie { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.livello-avviso { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--gold-soft, rgba(142,110,60,.12)); color: var(--text); font-size: 13.5px; line-height: 1.4; border-left: 3px solid var(--gold); }
+.top-riga { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.livello-eti + .top-riga { border-top: 0; }
+.top-pos { font: 600 17px var(--serif); color: var(--muted); text-align: center; }
+.top-nome { display: flex; flex-direction: column; min-width: 0; }
+.top-nome b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-nome .sub { font-size: 12.5px; color: var(--muted); }
+.top-val { font-size: 15px; }

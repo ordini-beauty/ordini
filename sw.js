@@ -1,5 +1,5 @@
 // Cache dell'interfaccia: l'app si apre anche senza rete (i dati li gestisce Firestore offline)
-const CACHE = "ordini-v21";
+const CACHE = "ordini-v24";
 const FILES = ["./", "index.html", "styles.css", "app.js", "calc.js", "importa.js", "model.js", "firebase-config.js", "manifest.json", "icon.svg", "icon-180.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).catch(() => {})); self.skipWaiting(); });
 self.addEventListener("activate", e => {
