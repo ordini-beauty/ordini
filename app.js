@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=17";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=17";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=18";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=18";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=17";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=18";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -1449,7 +1449,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v17</p>`;
+    <p class="versione" style="text-align:center">v18</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
@@ -1623,26 +1623,31 @@ function renderConversione() {
 // =====================================================================
 // NOTIFICHE (Worker Cloudflare)
 // =====================================================================
-let workerUrl = null;
+let workerUrlFile = null;
+// Indirizzo del Worker: prima quello salvato nell'app (Riepilogo → Notifiche), poi notifiche-config.js
 async function leggiWorkerUrl() {
-  if (workerUrl !== null) return workerUrl;
+  if (impostazioni.workerUrl) return String(impostazioni.workerUrl).trim().replace(/\/+$/, "");
+  if (workerUrlFile !== null) return workerUrlFile;
   try {
-    const t = await (await fetch("notifiche-config.js", { cache: "no-store" })).text();
-    workerUrl = (t.replace(/^\s*\/\/.*$/gm, "").match(/https:\/\/[^"'`\s]+/) || [""])[0].replace(/\/+$/, "");
-  } catch { workerUrl = ""; }
-  return workerUrl;
+    const r = await fetch("notifiche-config.js", { cache: "no-store" });
+    const t = r.ok ? await r.text() : "";
+    workerUrlFile = (t.replace(/^\s*\/\/.*$/gm, "").match(/https:\/\/[^"'`\s]+\.workers\.dev[^"'`\s]*/) || [""])[0].replace(/\/+$/, "");
+  } catch { workerUrlFile = ""; }
+  return workerUrlFile;
 }
 const NOTIFICHE_BASE = { ora: 9, compleanni: true, arrivi: true, pagamenti: true, ricontatti: false, ordinare: true, soglia: true };
 const prefNotifiche = () => ({ ...NOTIFICHE_BASE, ...(impostazioni.notifiche || {}) });
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const versioneIOS = () => { const m = navigator.userAgent.match(/OS (\d+)_(\d+)/); return m ? Number(m[1]) + Number(m[2]) / 100 : null; };
 const daHome = () => window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 const b64uInBytes = (s) => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+const bytesUguali = (a, b) => a && b && a.byteLength === b.byteLength && new Uint8Array(a).every((x, i) => x === new Uint8Array(b)[i]);
 const tokenCasuale = () => [...crypto.getRandomValues(new Uint8Array(24))].map(x => x.toString(16).padStart(2, "0")).join("");
 async function chiamaWorker(percorso, corpo) {
   const url = await leggiWorkerUrl();
   const r = await fetch(url + percorso, corpo ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) } : {});
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.errore || `errore ${r.status}`);
+  if (!r.ok) { const e = new Error(j.errore || `errore ${r.status}`); e.dati = j; throw e; }
   return j;
 }
 async function iscrizioneDispositivo() {
@@ -1650,20 +1655,34 @@ async function iscrizioneDispositivo() {
   const reg = await navigator.serviceWorker.getRegistration();
   return reg ? reg.pushManager.getSubscription() : null;
 }
+let chiaveVapid = null;          // scaricata prima, così l'iscrizione parte subito dal tocco (iPhone lo richiede)
+async function prendiChiaveVapid() {
+  if (chiaveVapid) return chiaveVapid;
+  const { chiave: k } = await chiamaWorker("/vapid");
+  if (!k) throw new Error("Il Worker non ha la chiave VAPID_PUBLIC_KEY");
+  chiaveVapid = k; return k;
+}
+
 async function disegnaNotifiche() {
   const box = $("#box-notifiche"); if (!box) return;
   const url = await leggiWorkerUrl();
+  if (!box.isConnected) return;   // la pagina è stata ridisegnata nel frattempo
   const p = prefNotifiche();
+  const campoUrl = `<details class="more" style="margin-top:12px;background:var(--bg)" ${url ? "" : "open"}><summary>🔗 Indirizzo del Worker</summary>
+      <input id="worker-url" placeholder="https://beauty-ordini-notifiche.tuonome.workers.dev" value="${esc(impostazioni.workerUrl || url)}" autocomplete="off" autocapitalize="off">
+      <button class="c-blue" id="worker-salva" style="margin-top:8px;width:100%">Salva indirizzo</button>
+      <div class="hint">Lo trovi nella pagina del Worker su Cloudflare, finisce con <b>.workers.dev</b>. Salvato qui, vale su tutti i dispositivi.</div></details>`;
   let corpo;
-  if (!url) corpo = `<div class="hint" style="margin:0">Non ancora collegate: serve il Worker Cloudflare (vedi istruzioni).</div>`;
+  if (!url) corpo = `<div class="hint" style="margin:0">Scrivi qui sotto l'indirizzo del Worker Cloudflare.</div>`;
   else if (isIOS() && !daHome()) corpo = `<div class="hint" style="margin:0">Su iPhone le notifiche funzionano solo con l'app aggiunta alla schermata Home:
       in Safari tocca <b>Condividi</b> → <b>Aggiungi alla schermata Home</b>, poi apri l'app da lì.</div>`;
-  else if (!("PushManager" in window) || !("Notification" in window)) corpo = `<div class="hint" style="margin:0">Questo browser non supporta le notifiche.</div>`;
+  else if (!("PushManager" in window) || !("Notification" in window)) corpo = `<div class="hint" style="margin:0">Questo browser non supporta le notifiche${isIOS() ? " (serve iOS 16.4 o più recente)" : ""}.</div>`;
   else if (Notification.permission === "denied") corpo = `<div class="hint" style="margin:0">Le notifiche sono bloccate. Su iPhone: Impostazioni → Notifiche → Ordini → Consenti notifiche.</div>`;
   else {
     const sub = await iscrizioneDispositivo();
-    if (!sub) corpo = `<div class="hint" style="margin:0 0 10px">Ti avviso io di compleanni, pacchi in ritardo, pagamenti da chiedere e richieste da ordinare.</div>
-      <button class="big primary" id="notif-attiva">🔔 Attiva su questo dispositivo</button>`;
+    if (!box.isConnected) return;
+    if (!sub) { corpo = `<div class="hint" style="margin:0 0 10px">Ti avviso io di compleanni, pacchi in ritardo, pagamenti, cose da ordinare e soglia di spesa.</div>
+      <button class="big primary" id="notif-attiva">🔔 Attiva su questo dispositivo</button>`; prendiChiaveVapid().catch(() => {}); }
     else corpo = `<div class="hint" style="margin:0 0 10px;color:var(--green)"><b>✓ Attive su questo dispositivo</b></div>
       <div class="yn-q" style="font-size:16px">A che ora?</div>
       <div class="chips small-chips">${[8, 9, 12, 18, 20].map(h => `<button class="chip ${p.ora === h ? "sel" : ""}" data-nora="${h}">${h}:00</button>`).join("")}</div>
@@ -1673,35 +1692,136 @@ async function disegnaNotifiche() {
       <div class="stack" style="margin-top:14px"><button id="notif-prova">📨 Mandami una prova</button>
         <button class="danger" id="notif-off" style="text-align:center">Disattiva su questo dispositivo</button></div>`;
   }
-  box.innerHTML = `<div class="yn-q">🔔 Notifiche</div>${corpo}`;
-  $("#notif-attiva")?.addEventListener("click", attivaNotifiche);
-  $("#notif-prova")?.addEventListener("click", async () => {
-    try { await programmaNotifiche(true); await chiamaWorker("/prova", { utente: uid, token: impostazioni.pushToken }); avviso("📨 Inviata: arriva tra pochi secondi"); }
-    catch (e) { alert("Non sono riuscita a mandare la prova: " + e.message); }
+  if (!box.isConnected) return;
+  box.innerHTML = `<div class="yn-q">🔔 Notifiche</div>${corpo}${campoUrl}
+    <button id="notif-check" style="width:100%;margin-top:10px">🔍 Controlla perché non funzionano</button><div id="notif-esito"></div>`;
+  $("#notif-attiva", box)?.addEventListener("click", attivaNotifiche);
+  $("#notif-prova", box)?.addEventListener("click", async () => {
+    try { await programmaNotifiche(true); const r = await chiamaWorker("/prova", { utente: uid, token: impostazioni.pushToken });
+      avviso(r.inviate ? "📨 Inviata: arriva tra pochi secondi" : "Il Worker non è riuscito a mandarla: tocca “Controlla”"); }
+    catch (e) { alert("Non sono riuscita a mandare la prova: " + e.message + "\n\nTocca “🔍 Controlla perché non funzionano”."); }
   });
-  $("#notif-off")?.addEventListener("click", async () => {
+  $("#notif-off", box)?.addEventListener("click", async () => {
     const sub = await iscrizioneDispositivo();
     if (sub) { try { await chiamaWorker("/disiscrivi", { utente: uid, token: impostazioni.pushToken, endpoint: sub.endpoint }); } catch {} await sub.unsubscribe(); }
     avviso("🔕 Notifiche disattivate su questo dispositivo"); disegnaNotifiche();
   });
-  $$("[data-nora]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, ora: Number(b.dataset.nora) } }, { merge: true })));
-  $$("[data-ntipo]").forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, [b.dataset.ntipo]: !p[b.dataset.ntipo] } }, { merge: true })));
+  $("#worker-salva", box).addEventListener("click", async () => {
+    const v = $("#worker-url", box).value.trim().replace(/\/+$/, "");
+    if (v && !/^https:\/\/[^\s/]+\.workers\.dev$/.test(v) && !confirm("L'indirizzo di solito è tipo https://nome.tuonome.workers.dev. Lo salvo lo stesso?")) return;
+    chiaveVapid = null;
+    await setDoc(docImpostazioni(), { workerUrl: v || null }, { merge: true });
+    avviso(v ? "🔗 Indirizzo salvato" : "Indirizzo tolto");
+  });
+  $("#notif-check", box).addEventListener("click", controllaNotifiche);
+  $$("[data-nora]", box).forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, ora: Number(b.dataset.nora) } }, { merge: true })));
+  $$("[data-ntipo]", box).forEach(b => b.addEventListener("click", () => setDoc(docImpostazioni(), { notifiche: { ...p, [b.dataset.ntipo]: !p[b.dataset.ntipo] } }, { merge: true })));
 }
+
 async function attivaNotifiche() {
   try {
+    // l'iscrizione deve partire subito dal tocco: niente attese di rete prima del permesso
     const permesso = await Notification.requestPermission();
     if (permesso !== "granted") { avviso("Senza il permesso non posso mandarti notifiche"); return disegnaNotifiche(); }
+    const k = chiaveVapid || await prendiChiaveVapid();
     const reg = await navigator.serviceWorker.ready;
-    const { chiave: k } = await chiamaWorker("/vapid");
     const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uInBytes(k) });
     let token = impostazioni.pushToken;
     if (!token) { token = tokenCasuale(); await setDoc(docImpostazioni(), { pushToken: token, notifiche: prefNotifiche() }, { merge: true }); impostazioni.pushToken = token; }
     await chiamaWorker("/iscrivi", { utente: uid, token, subscription: sub.toJSON() });
     await programmaNotifiche(true);
-    avviso("🔔 Notifiche attive!");
-  } catch (e) { alert("Non sono riuscita ad attivare le notifiche: " + e.message); }
+    avviso("🔔 Notifiche attive! Prova “Mandami una prova”");
+  } catch (e) { alert("Non sono riuscita ad attivare le notifiche: " + e.message + "\n\nTocca “🔍 Controlla perché non funzionano”."); }
   disegnaNotifiche();
 }
+
+// Controllo passo per passo: dice cosa non va e come sistemarlo
+async function controllaNotifiche() {
+  const out = $("#notif-esito"); const righe = [];
+  const pulsante = $("#notif-check");
+  const metti = (stato, titolo, dettaglio = "") => { righe.push({ stato, titolo, dettaglio }); out.innerHTML = disegnaEsito(righe); };
+  const disegnaEsito = (r) => `<div class="esito">${r.map(x => `<div class="es-riga es-${x.stato}"><span>${{ ok: "✅", no: "❌", forse: "⚠️", info: "ℹ️" }[x.stato]}</span>
+    <div><b>${esc(x.titolo)}</b>${x.dettaglio ? `<div class="hint" style="margin:2px 0 0">${x.dettaglio}</div>` : ""}</div></div>`).join("")}
+    ${r.length ? `<button class="pill" id="esito-copia" style="margin-top:8px">📋 Copia il risultato</button>` : ""}</div>`;
+  const fine = () => out.querySelector("#esito-copia")?.addEventListener("click", async () => {
+    const t = righe.map(x => `${{ ok: "OK", no: "NO", forse: "?", info: "i" }[x.stato]} ${x.titolo}${x.dettaglio ? " — " + x.dettaglio.replace(/<[^>]+>/g, "") : ""}`).join("\n");
+    try { await navigator.clipboard.writeText(t); avviso("📋 Copiato: incollalo nella chat"); } catch { alert(t); }
+  });
+  pulsante.disabled = true;
+  try {
+    // 1. indirizzo
+    const url = await leggiWorkerUrl();
+    if (!url) { metti("no", "Manca l'indirizzo del Worker", "Scrivilo in “🔗 Indirizzo del Worker” qui sopra e tocca Salva."); return; }
+    metti("ok", "Indirizzo del Worker", esc(url));
+    // 2. raggiungibile + ORIGINE
+    let info = null;
+    try { info = await (await fetch(url + "/", { cache: "no-store" })).json(); }
+    catch {
+      let esiste = false; try { await fetch(url + "/", { mode: "no-cors", cache: "no-store" }); esiste = true; } catch {}
+      if (esiste) metti("no", "Il Worker risponde ma blocca questa app",
+        `Nel Worker la variabile <b>ORIGINE</b> deve essere esattamente <b>${esc(location.origin)}</b> (senza barra finale). Poi Deploy.`);
+      else metti("no", "Non riesco a raggiungere il Worker", "Controlla l'indirizzo (deve iniziare con https:// e finire con .workers.dev) e che il Worker sia pubblicato (Deploy).");
+      return;
+    }
+    if (!info?.ok) { metti("no", "A quell'indirizzo non c'è il Worker giusto", "Hai incollato worker.js nell'editor di Cloudflare e premuto Deploy?"); return; }
+    metti("ok", "Il Worker risponde a questa app");
+    // 3. configurazione del Worker (se è la versione nuova la dice)
+    if (info.controlli) {
+      const c = info.controlli;
+      metti(c.kv ? "ok" : "no", "Archivio KV collegato", c.kv ? "" : "Settings → Bindings → KV namespace con nome <b>PROMEMORIA</b> (maiuscolo).");
+      metti(c.chiavePubblica ? "ok" : "no", "Chiave VAPID_PUBLIC_KEY", c.chiavePubblica ? "" : "Manca o è incompleta: ricopiala da genera-chiavi.html.");
+      metti(c.chiavePrivata ? "ok" : "no", "Chiave VAPID_PRIVATE_JWK", c.chiavePrivata ? "" : esc(c.erroreChiave || "Manca o è copiata a metà: va incollato tutto, dalla { alla }."));
+      if (c.chiavePubblica && c.chiavePrivata) metti(c.coppiaGiusta ? "ok" : "no", "Le due chiavi vanno insieme", c.coppiaGiusta ? "" : "Pubblica e privata vengono da generazioni diverse: ricreale e ricopiale entrambe.");
+      metti(c.subject ? "ok" : "forse", "VAPID_SUBJECT", c.subject ? esc(c.subject) : "Metti <b>mailto:</b> seguito dalla tua email vera.");
+      metti(c.cron ? "ok" : "forse", "Invio automatico ogni ora (Cron)", c.cron ? `ultimo giro: ${new Date(c.cron).toLocaleString("it-IT")}` : "Non risulta ancora partito: Settings → Triggers → Cron <b>0 * * * *</b> (può servire fino a un'ora).");
+    } else metti("forse", "Il Worker è una versione vecchia", "Ricarica su Cloudflare il nuovo <b>worker.js</b>: così posso controllare anche chiavi e archivio.");
+    // 4. dispositivo
+    if (isIOS()) {
+      const v = versioneIOS();
+      if (v && v < 16.04) { metti("no", `iOS ${String(v).replace(".", ",")}: troppo vecchio`, "Le notifiche delle app web servono da iOS 16.4: aggiorna l'iPhone."); return; }
+      if (!daHome()) { metti("no", "App aperta da Safari", "Aggiungila alla schermata Home (Condividi → Aggiungi alla schermata Home) e aprila dall'icona."); return; }
+      metti("ok", "App aperta dalla schermata Home");
+    }
+    if (!("Notification" in window) || !("PushManager" in window)) { metti("no", "Questo browser non supporta le notifiche"); return; }
+    if (Notification.permission === "denied") { metti("no", "Notifiche bloccate", "iPhone: Impostazioni → Notifiche → Ordini → Consenti. Mac: impostazioni del sito nel browser."); return; }
+    if (Notification.permission !== "granted") { metti("forse", "Permesso non ancora dato", "Tocca “🔔 Attiva su questo dispositivo”."); return; }
+    metti("ok", "Permesso notifiche dato");
+    // 5. iscrizione e chiave
+    const sub = await iscrizioneDispositivo();
+    if (!sub) { metti("no", "Questo dispositivo non è iscritto", "Tocca “🔔 Attiva su questo dispositivo”."); return; }
+    try {
+      const k = await prendiChiaveVapid();
+      const stessa = bytesUguali(sub.options?.applicationServerKey, b64uInBytes(k).buffer);
+      if (sub.options?.applicationServerKey && !stessa) {
+        metti("no", "Iscritto con chiavi vecchie", "Le chiavi del Worker sono cambiate: tocca “Disattiva su questo dispositivo” e poi di nuovo “Attiva”.");
+        return;
+      }
+    } catch (e) { metti("no", "Il Worker non dà la chiave pubblica", esc(e.message)); return; }
+    metti("ok", "Dispositivo iscritto");
+    if (!impostazioni.pushToken) { metti("no", "Manca il codice di iscrizione", "Disattiva e riattiva le notifiche."); return; }
+    try { await chiamaWorker("/iscrivi", { utente: uid, token: impostazioni.pushToken, subscription: sub.toJSON() }); metti("ok", "Il Worker conosce questo dispositivo"); }
+    catch (e) { metti("no", "Il Worker rifiuta l'iscrizione", esc(e.message) + (/codice/.test(e.message) ? " — disattiva e riattiva le notifiche." : "")); return; }
+    // 6. prova vera
+    try {
+      const r = await chiamaWorker("/prova", { utente: uid, token: impostazioni.pushToken });
+      const mio = (r.dettagli || []).find(d => d.endpoint === sub.endpoint.slice(-24)) || (r.dettagli || [])[0];
+      if (r.inviate) metti("ok", "Prova inviata dal Worker", "Deve arrivare entro pochi secondi. Se non arriva: controlla che non sia attiva la modalità Full Immersion / Non disturbare.");
+      else metti("no", "Il servizio di Apple/Google ha rifiutato la notifica", mio ? `Risposta ${mio.stato}: ${esc(mio.testo || "")}. ${spiegaRifiuto(mio)}` : "");
+    } catch (e) {
+      const d = e.dati?.dettagli?.[0];
+      metti("no", "La prova non è partita", esc(e.message) + (d ? ` — risposta ${d.stato}: ${esc(d.testo || "")}. ${spiegaRifiuto(d)}` : ""));
+    }
+  } finally { pulsante.disabled = false; fine(); }
+}
+function spiegaRifiuto(d) {
+  const t = String(d.testo || "");
+  if (d.stato === 403 && /BadJwtToken|jwt|vapid/i.test(t)) return "Problema con le chiavi o con VAPID_SUBJECT: controlla che il subject sia mailto: + una email vera, poi disattiva e riattiva.";
+  if (d.stato === 403) return "Le chiavi non corrispondono all'iscrizione: disattiva e riattiva le notifiche su questo dispositivo.";
+  if (d.stato === 404 || d.stato === 410) return "Iscrizione scaduta: disattiva e riattiva le notifiche.";
+  if (d.stato === 400) return "Richiesta non valida: ricarica su Cloudflare l'ultimo worker.js.";
+  return "";
+}
+
 function calcolaPromemoria() {
   const p = prefNotifiche();
   const oraTxt = String(p.ora).padStart(2, "0") + ":00:00";
