@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=33";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=33";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=34";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=34";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=33";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=34";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -314,7 +314,7 @@ function apriMessaggi() {
   $("#msg-salva").addEventListener("click", async () => {
     const salvati = {};
     for (const m of MESSAGGI) if (bozze[m.k].trim() && bozze[m.k] !== m.testo) salvati[m.k] = bozze[m.k];
-    await setDoc(docImpostazioni(), { messaggi: salvati }, { merge: true });
+    inBackground(setDoc(docImpostazioni(), { messaggi: salvati }, { merge: true }));
     chiudiSheet(true); avviso("Messaggi salvati");
   });
   apriSheet();
@@ -394,15 +394,24 @@ async function eliminaVendite(ids) {
 }
 
 // ---------- Scritture con Annulla ----------
+// Le scritture si applicano subito sul telefono; Firebase le manda al server appena c'è rete.
+// Non aspetto la conferma del server: con rete lenta o assente il salvataggio restava "appeso".
+function inBackground(promessa) {
+  promessa.catch(err => { console.error(err); avviso(`Non sono riuscita a salvare: ${err?.code === "permission-denied" ? "accesso non consentito, esci e rientra" : (err?.message || err)}`); });
+}
 async function scriviConAnnulla(modifiche, messaggio) {
   // modifiche: [{ ref, prima (oggetto o null), dopo (oggetto o null) }]
   const b = writeBatch(db);
-  modifiche.forEach(m => m.dopo ? b.set(m.ref, pulisci(m.dopo)) : b.delete(m.ref));
-  await b.commit();
+  try { modifiche.forEach(m => m.dopo ? b.set(m.ref, pulisci(m.dopo)) : b.delete(m.ref)); }   // pulisci: niente campi vuoti che Firebase rifiuta
+  catch (err) {                          // dato non valido: lo dico e lascio la scheda aperta, così non si perde niente
+    console.error(err); $$(".sh-foot button").forEach(x => { x.disabled = false; });
+    avviso(`Non sono riuscita a salvare: ${err?.message || err}`); throw err;
+  }
+  inBackground(b.commit());
   if (messaggio) avviso(messaggio, async () => {
     const u = writeBatch(db);
     modifiche.forEach(m => m.prima ? u.set(m.ref, pulisci(m.prima)) : u.delete(m.ref));
-    await u.commit();
+    inBackground(u.commit());
   });
 }
 const senzaId = ({ id, ...resto }) => resto;
@@ -1335,7 +1344,7 @@ function apriVendita(v, opz = {}) {
     $("#nuova-ok").addEventListener("click", async () => {
       const nome = $("#nuova-nome").value.trim(); if (!nome) return $("#nuova-nome").focus();
       const tel = $("#nuova-tel").value.trim();
-      const ref = await addDoc(col("clienti"), { nome, telefono: tel, note: "" });
+      const ref = doc(col("clienti")); inBackground(setDoc(ref, { nome, telefono: tel, note: "" }));
       if (!clienti.some(c => c.id === ref.id)) clienti.push({ id: ref.id, nome, telefono: tel });
       mostraNuovaCliente = false; scegli(ref.id);
     });
@@ -1782,13 +1791,13 @@ function renderHome() {
   $$("[data-ric]").forEach(b => b.addEventListener("click", () => { const x = ric[+b.dataset.ric]; apriWhatsApp(x.cliente, msgRicontatto(x)); }));
   $$("[data-ricfatto]").forEach(b => b.addEventListener("click", async () => {
     const c = clienti.find(x => x.id === b.dataset.ricfatto); const prima = c.ultimoContatto || null;
-    await setDoc(doc(col("clienti"), c.id), { ultimoContatto: oggi() }, { merge: true });
+    inBackground(setDoc(doc(col("clienti"), c.id), { ultimoContatto: oggi() }, { merge: true }));
     avviso(`${c.nome}: sentita`, () => setDoc(doc(col("clienti"), c.id), { ultimoContatto: prima }, { merge: true }));
   }));
   $$("[data-auguri]").forEach(b => b.addEventListener("click", () => { const c = clienti.find(x => x.id === b.dataset.auguri); apriWhatsApp(c, msgAuguri(c)); }));
   $$("[data-auguri-fatti]").forEach(b => b.addEventListener("click", async () => {
     const c = clienti.find(x => x.id === b.dataset.auguriFatti); const p = prossimoCompleanno(c.compleanno); const prima = c.auguriFatti || null;
-    await setDoc(doc(col("clienti"), c.id), { auguriFatti: p.data }, { merge: true });
+    inBackground(setDoc(doc(col("clienti"), c.id), { auguriFatti: p.data }, { merge: true }));
     avviso(`Auguri a ${primoNome(c)} fatti`, () => setDoc(doc(col("clienti"), c.id), { auguriFatti: prima }, { merge: true }));
   }));
 }
@@ -1849,7 +1858,7 @@ function collegaVistaOmaggi() {
   $$("[data-om-acq]").forEach(el => el.addEventListener("click", () => apriAcquisto(acquistoDi(el.dataset.omAcq))));
   $$("[data-om-ven]").forEach(el => el.addEventListener("click", () => apriVendita(vendite.find(v => v.id === el.dataset.omVen))));
   $$("[data-mov]").forEach(b => b.addEventListener("click", async () => {
-    const ref = await addDoc(col("movimentiOmaggi"), { nome: b.dataset.mov, qta: Number(b.dataset.q), data: oggi(), nota: "" });
+    const ref = doc(col("movimentiOmaggi")); inBackground(setDoc(ref, { nome: b.dataset.mov, qta: Number(b.dataset.q), data: oggi(), nota: "" }));
     avviso(`${b.dataset.mov}: ${b.dataset.q > 0 ? "uno in più" : "uno in meno"}`, () => deleteDoc(ref));
   }));
   $$("[data-delmov]").forEach(b => b.addEventListener("click", async () => {
@@ -1875,7 +1884,7 @@ function apriNuovoOmaggio() {
   $("#sh-back").addEventListener("click", () => chiudiSheet());
   $("#no-ok").addEventListener("click", async () => {
     const nome = $("#no-nome").value.trim(); if (!nome) return $("#no-nome").focus();
-    await addDoc(col("movimentiOmaggi"), { nome, qta: Math.max(1, parseInt($("#no-qta").value) || 1), data: oggi(), nota: "" });
+    inBackground(addDoc(col("movimentiOmaggi"), { nome, qta: Math.max(1, parseInt($("#no-qta").value) || 1), data: oggi(), nota: "" }));
     chiudiSheet(true); avviso("Omaggio aggiunto");
   });
   apriSheet();
@@ -1960,7 +1969,7 @@ function apriCliente(c) {
     const g = $("#c-giorno").value, m = $("#c-mese").value;
     if ((g && !m) || (!g && m)) { avviso("Per il compleanno scegli sia il giorno sia il mese"); return; }
     const dati = { nome, telefono: $("#c-tel").value.trim(), note: $("#c-note").value, compleanno: g && m ? `${m}-${g}` : null };
-    if (c) await setDoc(doc(col("clienti"), c.id), dati, { merge: true }); else await addDoc(col("clienti"), dati);
+    if (c) inBackground(setDoc(doc(col("clienti"), c.id), dati, { merge: true })); else inBackground(addDoc(col("clienti"), dati));
     chiudiSheet(true); avviso("✓ Salvato");
   });
   $("#c-del")?.addEventListener("click", async () => {
@@ -2028,7 +2037,7 @@ function apriCampagna() {
     }));
     $("#camp-modifica").addEventListener("click", () => { bozza = camp.testo; schermataTesto(); });
     $("#camp-fine").addEventListener("click", async () => {
-      const prima = camp; await setDoc(docImpostazioni(), { campagna: null }, { merge: true }); chiudiSheet(true);
+      const prima = camp; inBackground(setDoc(docImpostazioni(), { campagna: null }, { merge: true })); chiudiSheet(true);
       avviso("Messaggio chiuso", () => setDoc(docImpostazioni(), { campagna: prima }, { merge: true }));
     });
   }
@@ -2115,7 +2124,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v33</p>`;
+    <p class="versione" style="text-align:center">v34</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });

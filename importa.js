@@ -1,6 +1,6 @@
 // Conversione del vecchio file Excel (Data, Cliente, Dettaglio, Omaggio, Fatturato, Entrate, Uscite, Guadagno)
 // in ordini dell'app. Funzione pura: riceve le righe del foglio come array di array.
-import { IO, STORICO, chiave } from "./calc.js?v=33";
+import { IO, STORICO, chiave } from "./calc.js?v=34";
 
 export function parseEuro(v) {
   if (typeof v === "number") return v;
