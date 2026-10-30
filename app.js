@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=32";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=32";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=33";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=33";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=32";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=33";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -77,6 +77,7 @@ function prossimoCompleanno(mmdd) {
 }
 // una riga è "da ordinare" se non è collegata a un acquisto e non ha un costo noto
 const rigaDaOrdinare = (r) => !r.fonte && (r.costo === undefined || r.costo === null);
+const consegnabile = (r) => !r.consegnato && !rigaDaOrdinare(r) && (!r.fonte || acquistoDi(r.fonte.acquistoId)?.arrivato !== false);
 const rigaArrivata = (r) => !r.fonte ? !rigaDaOrdinare(r) : acquistoDi(r.fonte.acquistoId)?.arrivato !== false;
 
 // Colore fisso per ogni persona (avatar)
@@ -326,7 +327,28 @@ const intestazioneLista = (tipo, n) => n ? `<div class="lista-testa">${inSelezio
   ? `<button class="link" data-sel-tutti="${tipo}">Seleziona tutti</button><button class="link" data-sel-fine>Fine</button>`
   : `<span></span><button class="link" data-sel-inizia="${tipo}">Seleziona</button>`}</div>` : "";
 const barraSelezione = (tipo) => inSelezione(tipo) ? `<div class="barra-sel"><span>${plurale(selezione.ids.size, "selezionato", "selezionati")}</span>
-  <button class="danger-pieno" data-sel-elimina ${selezione.ids.size ? "" : "disabled"}>Elimina</button></div>` : "";
+  <span class="barra-az">${tipo === "acquisti" ? `<button class="c-green" data-sel-arrivati ${selezione.ids.size ? "" : "disabled"}>Arrivati</button>`
+    : `<button class="c-green" data-sel-pagati ${selezione.ids.size ? "" : "disabled"}>Pagati</button><button class="c-orange" data-sel-consegnati ${selezione.ids.size ? "" : "disabled"}>Consegnati</button>`}
+  <button class="danger-pieno" data-sel-elimina ${selezione.ids.size ? "" : "disabled"}>Elimina</button></span></div>` : "";
+// segnare al volo, senza aprire l'ordine (sempre con "Annulla")
+async function segnaArrivati(ids) {
+  const mod = ids.map(id => acquistoDi(id)).filter(a => a && a.arrivato === false)
+    .map(a => ({ ref: refAcquisto(a.id), prima: senzaId(a), dopo: { ...senzaId(a), arrivato: true, arrivatoIl: oggi() } }));
+  if (!mod.length) return avviso("Erano già arrivati");
+  await scriviConAnnulla(mod, mod.length === 1 ? "Segnato come arrivato" : `${mod.length} ordini segnati come arrivati`);
+}
+async function segnaPagati(ids) {
+  const mod = ids.map(id => vendite.find(v => v.id === id)).filter(v => v && !isMia(v) && !v.pagato)
+    .map(v => ({ ref: refVendita(v.id), prima: senzaId(v), dopo: { ...senzaId(v), pagato: true, pagatoIl: oggi() } }));
+  if (!mod.length) return avviso("Erano già pagati");
+  await scriviConAnnulla(mod, mod.length === 1 ? `${nomeVendita(vendite.find(v => v.id === ids[0]))}: pagato` : `${mod.length} ordini segnati come pagati`);
+}
+async function segnaConsegnati(ids) {
+  const mod = ids.map(id => vendite.find(v => v.id === id)).filter(v => v && (v.righe || []).some(consegnabile))
+    .map(v => ({ ref: refVendita(v.id), prima: senzaId(v), dopo: { ...senzaId(v), righe: v.righe.map(r => consegnabile(r) ? { ...r, consegnato: true } : r) } }));
+  if (!mod.length) return avviso("Niente da consegnare");
+  await scriviConAnnulla(mod, mod.length === 1 ? "Segnato come consegnato" : `${mod.length} ordini segnati come consegnati`);
+}
 function collegaSelezione(tipo, tuttiIds, apri) {
   $$("[data-sel-inizia]").forEach(b => b.addEventListener("click", () => { selezione = { tipo, ids: new Set() }; render(); }));
   $$("[data-sel-fine]").forEach(b => b.addEventListener("click", () => { selezione = null; render(); }));
@@ -338,6 +360,14 @@ function collegaSelezione(tipo, tuttiIds, apri) {
     selezione.ids.has(id) ? selezione.ids.delete(id) : selezione.ids.add(id); render();
   }));
   $("[data-sel-elimina]")?.addEventListener("click", () => tipo === "acquisti" ? eliminaAcquisti([...selezione.ids]) : eliminaVendite([...selezione.ids]));
+  const fine = (f) => async () => { const ids = [...selezione.ids]; selezione = null; await f(ids); render(); };
+  $("[data-sel-arrivati]")?.addEventListener("click", fine(segnaArrivati));
+  $("[data-sel-pagati]")?.addEventListener("click", fine(segnaPagati));
+  $("[data-sel-consegnati]")?.addEventListener("click", fine(segnaConsegnati));
+  // pulsanti rapidi sulle schede: non aprono l'ordine
+  $$("[data-rapido]").forEach(b => b.addEventListener("click", (e) => { e.stopPropagation();
+    const [az, id] = b.dataset.rapido.split(":");
+    ({ arrivato: segnaArrivati, pagato: segnaPagati, consegnato: segnaConsegnati })[az]([id]); }));
 }
 async function scriviMolte(mod, messaggio) {
   if (mod.length <= 450) return scriviConAnnulla(mod, messaggio);
@@ -540,6 +570,7 @@ function htmlListaAcquisti() {
       ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : a.arrivato === false ? `${tot - usati} di ${tot} da assegnare` : `${tot - usati} di ${tot} in magazzino`}</span>` : ""}
       ${(a.omaggiRicevuti || []).length ? `<span class="badge c-gold">Omaggi ${somma(a.omaggiRicevuti, x => x.qta)}</span>` : ""}
       ${(a.prodotti || []).some(p => p.codice) ? `<span class="badge c-blue">codici</span>` : ""}
+      ${a.arrivato === false && !inSelezione("acquisti") ? `<button class="rapido c-green" data-rapido="arrivato:${a.id}">✓ È arrivato</button>` : ""}
     </div>`;
   }
   return h + barraSelezione("acquisti");
@@ -1197,6 +1228,8 @@ function renderVendite() {
       ${isMia(v) ? `<span class="badge c-pink">Per me</span>` : v.pagato ? `<span class="badge c-green">✓ Pagato</span>` : `<span class="badge c-pink">Da pagare</span>`}
       ${dc ? `<span class="badge c-orange">${dc} da consegnare</span>` : `<span class="badge c-green">✓ Consegnato</span>`}
       ${c.nDaOrdinare ? `<span class="badge c-blue">${c.nDaOrdinare} da ordinare</span>` : ""}
+      ${inSelezione("vendite") ? "" : `<div class="rapidi">${!isMia(v) && !v.pagato ? `<button class="rapido c-green" data-rapido="pagato:${v.id}">✓ Pagato</button>` : ""}
+        ${(v.righe || []).some(consegnabile) ? `<button class="rapido c-orange" data-rapido="consegnato:${v.id}">✓ Consegnato</button>` : ""}</div>`}
     </div>`;
   }
   $("#view").innerHTML = h + barraSelezione("vendite");
@@ -2082,7 +2115,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v32</p>`;
+    <p class="versione" style="text-align:center">v33</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
