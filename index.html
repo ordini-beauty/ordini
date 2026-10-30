@@ -13,12 +13,12 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css?v=27">
+<link rel="stylesheet" href="styles.css?v=28">
 </head>
 <body>
   <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
   <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
-    <h2 style="margin-top:0;color:#2D6A3E">Ordini Beauty · versione 27</h2>
+    <h2 style="margin-top:0;color:#2D6A3E">Ordini Beauty · versione 28</h2>
     <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
       (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
     <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
@@ -45,7 +45,7 @@
         <button type="button" id="btn-reset" class="link small-link">Password dimenticata</button>
         <p id="login-error" class="error"></p>
       </form>
-      <p class="versione">v27</p>
+      <p class="versione">v28</p>
     </div>
   </section>
 
@@ -77,7 +77,7 @@
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v27)</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v28)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>
@@ -96,15 +96,25 @@
       if (location.protocol === "file:") motivi.push("Hai aperto il file direttamente dal computer. L'app va aperta dal suo indirizzo web (GitHub Pages).");
       if (window.__errori.join(" ").indexOf("does not provide an export named") >= 0)
         motivi.push("Il file app.js caricato è una versione vecchia: sostituiscilo nel repository GitHub con quello dello zip più recente.");
-      else if (!window.__appAvviata) motivi.push("Il codice dell'app non è partito: spesso è firebase-config.js non compilato o con un errore di battitura.");
+      else if (!window.__errori.length) motivi.push("L'app ci sta mettendo troppo a partire: di solito è una versione vecchia rimasta in memoria dopo un aggiornamento, oppure una connessione lenta. Tocca “Svuota la memoria e riapri”: i dati non si perdono.");
+      else if (!window.__appAvviata) motivi.push("Il codice dell'app non è partito: controlla che firebase-config.js sia quello giusto.");
       if (!navigator.onLine) motivi.push("Il dispositivo è offline: al primo avvio serve la connessione.");
       document.getElementById("diagnosi-testo").innerHTML =
         "<ul>" + motivi.map(function (m) { return "<li>" + m + "</li>"; }).join("") + "</ul>" +
         (window.__errori.length ? "<p><b>Dettaglio tecnico:</b></p><pre style='white-space:pre-wrap;background:#f3f3f3;padding:10px;border-radius:8px'>" +
-          window.__errori.join("\n").replace(/</g, "&lt;") + "</pre>" : "");
+          window.__errori.join("\n").replace(/</g, "&lt;") + "</pre>" : "") +
+        "<p style='display:flex;gap:10px;flex-wrap:wrap'><button onclick='location.reload()' style='padding:12px 16px;border-radius:10px;border:1px solid #ccc;background:#fff;font:inherit'>Riprova</button>" +
+        "<button onclick='svuotaERiapri()' style='padding:12px 16px;border-radius:10px;border:0;background:#2D6A3E;color:#fff;font:inherit'>Svuota la memoria e riapri</button></p>";
       document.getElementById("diagnosi").classList.remove("hidden");
-    }, 5000);
+    }, 12000);
+    // toglie la versione in memoria (service worker e cache) e ricarica: i dati restano su Firebase
+    function svuotaERiapri() {
+      var fatti = [];
+      if (navigator.serviceWorker) fatti.push(navigator.serviceWorker.getRegistrations().then(function (r) { return Promise.all(r.map(function (x) { return x.unregister(); })); }));
+      if (window.caches) fatti.push(caches.keys().then(function (k) { return Promise.all(k.map(function (x) { return caches.delete(x); })); }));
+      Promise.all(fatti).catch(function () {}).then(function () { location.replace(location.pathname + "?r=" + Date.now()); });
+    }
   </script>
-  <script type="module" src="app.js?v=27"></script>
+  <script type="module" src="app.js?v=28"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 // Cache dell'interfaccia: l'app si apre anche senza rete (i dati li gestisce Firestore offline)
-const CACHE = "ordini-v27";
+const CACHE = "ordini-v28";
 const FILES = ["./", "index.html", "styles.css", "app.js", "calc.js", "importa.js", "model.js", "firebase-config.js", "manifest.json", "icon.svg", "icon-180.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).catch(() => {})); self.skipWaiting(); });
 self.addEventListener("activate", e => {
@@ -10,7 +10,9 @@ self.addEventListener("fetch", e => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin || e.request.method !== "GET") return; // Firebase e Worker vanno sempre in rete
   // Rete prima (aggiornamenti immediati), cache se offline
-  e.respondWith(fetch(e.request, { cache: "no-cache" }).then(r => { const copia = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copia)); return r; })
+  // le pagine si chiedono così come sono (Safari non accetta opzioni sulle navigazioni), il resto senza cache del browser
+  const richiesta = e.request.mode === "navigate" ? fetch(e.request) : fetch(e.request, { cache: "no-cache" });
+  e.respondWith(richiesta.then(r => { const copia = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copia)); return r; })
     .catch(() => caches.match(e.request)));
 });
 
