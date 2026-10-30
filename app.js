@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=24";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=24";
-import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=24";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=27";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=27";
+import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo,
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=27";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -534,8 +534,8 @@ function htmlListaAcquisti() {
       <div class="row"><h3>${casella("acquisti", a.id)}${dataLunga(a.data)}${a.numeroOrdine ? ` <span class="muted" style="font-weight:500;font-size:15px">· n° ${esc(a.numeroOrdine)}</span>` : ""}</h3>
         <span class="amount num">${euro(totaleAcquisto(a))}</span></div>
       <div class="sub">${esc((a.prodotti || []).map(p => `${qtaDi(p) > 1 ? qtaDi(p) + "× " : ""}${p.nome}`).join(", ")) || "Nessun prodotto"}</div>
-      ${a.arrivato === false ? `<span class="badge c-blue">In arrivo da ${plurale(giorniDa(a.data), "giorno", "giorni")}</span>` : `<span class="badge c-green">✓ Arrivato</span>`}
-      ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : `${tot - usati} di ${tot} in magazzino`}</span>` : ""}
+      ${a.arrivato === false ? `<span class="badge c-blue">${giorniDa(a.data) > 0 ? `In arrivo da ${plurale(giorniDa(a.data), "giorno", "giorni")}` : "In arrivo · ordinato oggi"}</span>` : `<span class="badge c-green">✓ Arrivato</span>`}
+      ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : a.arrivato === false ? `${tot - usati} di ${tot} da assegnare` : `${tot - usati} di ${tot} in magazzino`}</span>` : ""}
       ${(a.omaggiRicevuti || []).length ? `<span class="badge c-gold">Omaggi ${somma(a.omaggiRicevuti, x => x.qta)}</span>` : ""}
       ${(a.prodotti || []).some(p => p.codice) ? `<span class="badge c-blue">codici</span>` : ""}
     </div>`;
@@ -560,7 +560,7 @@ function htmlCodici() {
     h += `<div class="section"><h2>Set</h2></div>`;
     for (const v of sets) h += `<div class="card tap cod-card" data-cat="${esc(v.id)}"><div class="row"><h3><span class="tag-set">Set</span>${esc(v.nome)}</h3>
         ${v.costoSet ? `<span class="muted num" style="font-size:14px">costo ${euro(v.costoSet)}</span>` : ""}</div>
-      <div class="sub">${esc((v.componenti || []).map(c => c.nome).join(" + "))}</div>
+      <div class="sub">${esc((v.componenti || []).map(c => (c.pezzi > 1 ? c.pezzi + "× " : "") + c.nome).join(" + "))}</div>
       <div class="cod-coppia uno"><button class="cod-pill ${v.codiceSet ? "" : "manca"}" data-copia="${esc(v.codiceSet || "")}"><small>Codice del set</small><b>${esc(v.codiceSet || "—")}</b></button></div></div>`;
     if (lista.length) h += `<div class="section"><h2>Prodotti</h2></div>`;
   }
@@ -597,30 +597,31 @@ function sceltaNuovoCodice() {
 
 function apriSetCatalogo(v) {
   const comps = (v?.componenti || []).map(c => ({ ...c }));
-  while (comps.length < 2) comps.push({ nome: "", valore: "" });
+  while (comps.length < 2) comps.push({ nome: "", valore: "", pezzi: 1 });
   sheetChiudi = null;
   const disegna = () => {
     $("#sheet-body").innerHTML = testataSheet(v ? "Set" : "Nuovo set", false) + `
       <div class="sh-main"><div class="question">${v ? esc(v.nome) : "Nuovo set"}</div>
-        <p class="q-hint">Più prodotti diversi comprati insieme a un prezzo più basso. Quando lo ordini, il costo lo divido tra i prodotti.</p>
+        <p class="q-hint">Set, calendario o cofanetto: più prodotti comprati insieme a un prezzo solo. Quando lo ordini, il costo lo divido tra i prodotti in base al prezzo di vendita.</p>
         <div class="yesno">
           <label style="margin-top:0">Nome del set</label><input id="sc-nome" value="${esc(v?.nome)}" placeholder="Es. Crema viso + crema mani" autocomplete="off">
           <div class="grid2"><div><label>Codice del set</label><input id="sc-cod" class="cod-in" value="${esc(v?.codiceSet || "")}" autocapitalize="characters" spellcheck="false" autocomplete="off"></div>
             <div><label>Costo del set</label><input id="sc-costo" inputmode="decimal" value="${esc(inIt(v?.costoSet ?? ""))}" placeholder="€"></div></div>
-          <label>Prodotti nel set e prezzo di catalogo</label>
-          ${comps.map((c, j) => `<div class="two-col" style="margin-bottom:8px"><input data-scn="${j}" list="dl-prodotti" value="${esc(c.nome)}" placeholder="Prodotto" autocomplete="off">
-            <input data-scv="${j}" inputmode="decimal" value="${esc(inIt(c.valore))}" placeholder="Prezzo €"></div>`).join("")}
+          <div class="set-righe set-righe-testa" style="margin-top:14px"><span>Prodotto dentro</span><span>Pezzi</span><span>Vendi a €</span></div>
+          ${comps.map((c, j) => `<div class="set-righe" style="margin-bottom:8px"><input data-scn="${j}" list="dl-prodotti" value="${esc(c.nome)}" placeholder="Prodotto" autocomplete="off">
+            <input data-scp="${j}" inputmode="numeric" value="${esc(c.pezzi || 1)}" aria-label="Pezzi">
+            <input data-scv="${j}" inputmode="decimal" value="${esc(inIt(c.valore))}" placeholder="€"></div>`).join("")}
           <button class="link" id="sc-riga">+ Altro prodotto</button></div>
         ${v ? `<button class="danger" id="sc-del" style="width:100%;margin-top:6px">Togli dall'elenco</button>` : ""}</div>
       <div class="sh-foot"><button class="big primary" id="sc-salva">Salva</button></div>`;
-    const leggi = () => { $$("[data-scn]").forEach(i => { comps[+i.dataset.scn].nome = i.value; }); $$("[data-scv]").forEach(i => { comps[+i.dataset.scv].valore = i.value; }); };
+    const leggi = () => { $$("[data-scn]").forEach(i => { comps[+i.dataset.scn].nome = i.value; }); $$("[data-scv]").forEach(i => { comps[+i.dataset.scv].valore = i.value; }); $$("[data-scp]").forEach(i => { comps[+i.dataset.scp].pezzi = i.value; }); };
     $("#sh-back").addEventListener("click", () => chiudiSheet());
-    $("#sc-riga").addEventListener("click", () => { const n = $("#sc-nome").value, k = $("#sc-cod").value, c = $("#sc-costo").value; leggi(); comps.push({ nome: "", valore: "" }); disegna();
+    $("#sc-riga").addEventListener("click", () => { const n = $("#sc-nome").value, k = $("#sc-cod").value, c = $("#sc-costo").value; leggi(); comps.push({ nome: "", valore: "", pezzi: 1 }); disegna();
       $("#sc-nome").value = n; $("#sc-cod").value = k; $("#sc-costo").value = c; });
     $("#sc-salva").addEventListener("click", async () => {
       leggi(); const nome = $("#sc-nome").value.trim(); if (!nome) return $("#sc-nome").focus();
-      const componenti = comps.filter(c => String(c.nome).trim()).map(c => ({ nome: c.nome.trim(), valore: numIt(c.valore) }));
-      if (componenti.length < 2) return avviso("Un set ha almeno due prodotti");
+      const componenti = comps.filter(c => String(c.nome).trim()).map(c => ({ nome: c.nome.trim(), valore: numIt(c.valore), pezzi: Math.max(1, parseInt(c.pezzi) || 1) }));
+      if (!componenti.length || somma(componenti, c => c.pezzi) < 2) return avviso("Scrivi almeno due prodotti che ci sono dentro");
       const dati = { nome, tipo: "set", codiceSet: normCodice($("#sc-cod").value) || null, costoSet: numIt($("#sc-costo").value) || null, componenti };
       const id = slug("set " + nome), mod = [{ ref: doc(col("catalogo"), id), prima: v && v.id === id ? senzaId(v) : null, dopo: dati }];
       if (v && v.id !== id) mod.push({ ref: doc(col("catalogo"), v.id), prima: senzaId(v), dopo: null });
@@ -680,7 +681,10 @@ function htmlMagazzino() {
   const valore = somma(g, x => x.costoTot);
   let h = `<div class="big-money c-orange" style="padding:18px"><div style="font-weight:700">Merce in casa</div>
     <div class="v num" style="font-size:36px">${euro(valore)}</div><div style="font-size:14px;opacity:.85">al prezzo che l'hai pagata · ancora da vendere o usare</div></div>`;
-  if (!g.length) return h + `<div class="empty"><div class="e-ico"></div><b>Magazzino vuoto</b><br>Qui finiscono i prodotti comprati e non ancora dati a nessuno.</div>`;
+  const arrivo = magazzino(acquisti, vendite, { ancheInArrivo: true }).reduce((n, x) => n + (x.confezione ? 0 : x.inArrivo), 0);
+  const notaArrivo = arrivo ? `<div class="hint" style="margin:0 4px 12px">${arrivo === 1 ? "1 prodotto è" : arrivo + " prodotti sono"} in arrivo: entrano qui quando segni l'ordine come arrivato.</div>` : "";
+  if (!g.length) return h + notaArrivo + `<div class="empty"><div class="e-ico"></div><b>Magazzino vuoto</b><br>Qui finiscono i prodotti arrivati e non ancora dati a nessuno.</div>`;
+  h += notaArrivo;
   g.forEach((x, i) => {
     h += `<div class="card b-orange"><div class="row"><div><h3>${x.confezione ? "" : ""}${esc(x.nome)}</h3>
         <div class="sub">${x.confezione ? `ancora ${euro(x.disponibili)} di prodotti dentro` : `costo ${euro(x.costoTot / x.disponibili)} a pezzo`}${x.inArrivo ? " · in arrivo" : ""}</div></div>
@@ -701,8 +705,12 @@ function apriAcquisto(a, opz = {}) {
     if (!m.has(p.daSet.id)) m.set(p.daSet.id, { info: p.daSet, comps: [] }); m.get(p.daSet.id).comps.push({ p, i }); }); return [...m.values()]; };
   const compsDi = (sid) => acq.prodotti.filter(p => p.daSet?.id === sid);
   // il costo del set si divide tra i prodotti in proporzione al prezzo di catalogo
-  const ricalcolaSet = (sid) => { const comps = compsDi(sid), tot = somma(comps, p => p.valoreSet), cs = numIt(comps[0]?.daSet.costoSet);
-    comps.forEach(p => { p.costo = Math.round((tot > 0 ? cs * (Number(p.valoreSet) || 0) / tot : cs / comps.length) * 10000) / 10000; }); };
+  // costo a pezzo = costo del set × (prezzo di vendita del pezzo ÷ valore di vendita di tutto il set)
+  const pezziDi = (p) => Math.max(1, Number(p.pezziSet) || 1);
+  const nSetDi = (comps) => Math.max(1, Math.round(qtaDi(comps[0]) / pezziDi(comps[0])));
+  const valoreSetTot = (comps) => somma(comps, p => (Number(p.valoreSet) || 0) * pezziDi(p));
+  const ricalcolaSet = (sid) => { const comps = compsDi(sid), tot = valoreSetTot(comps), cs = numIt(comps[0]?.daSet.costoSet), pezzi = somma(comps, pezziDi);
+    comps.forEach(p => { p.costo = Math.round((tot > 0 ? cs * (Number(p.valoreSet) || 0) / tot : cs / pezzi) * 10000) / 10000; }); };
   const nuovoIdAcq = a?.id || nuovoId();
   let tipoNuovo = "singolo";
   let modificato = false;
@@ -735,47 +743,55 @@ function apriAcquisto(a, opz = {}) {
   }
 
   function htmlSets() {
-    return setsIn().map(({ info: d, comps }) => { const q = qtaDi(comps[0].p); return `<div class="card prod-card set-card">
+    return setsIn().map(({ info: d, comps }) => { const q = nSetDi(comps.map(x => x.p)), tot = valoreSetTot(comps.map(x => x.p)), cs = numIt(d.costoSet);
+      return `<div class="card prod-card set-card">
       <div class="row"><b><span class="tag-set">Set</span>${esc(d.nome)}</b><button class="x" data-xset="${d.id}" aria-label="Togli il set">×</button></div>
       <div class="prod-grid">
-        <div><label>Quanti set</label><div class="stepper"><button data-sq="${d.id}" data-d="-1">−</button><b>${q}</b><button data-sq="${d.id}" data-d="1">＋</button></div></div>
-        <div><label>Costo del set</label><input class="costo-in" data-scosto="${d.id}" inputmode="decimal" value="${esc(inIt(d.costoSet))}" placeholder="€"></div></div>
+        <div><label>Quanti</label><div class="stepper"><button data-sq="${d.id}" data-d="-1">−</button><b>${q}</b><button data-sq="${d.id}" data-d="1">＋</button></div></div>
+        <div><label>Lo paghi (uno)</label><input class="costo-in" data-scosto="${d.id}" inputmode="decimal" value="${esc(inIt(d.costoSet))}" placeholder="€"></div></div>
       <div class="cod-row"><input class="cod-in" data-scod="${d.id}" value="${esc(d.codice || "")}" placeholder="Codice del set" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
-      <div class="set-comp">${comps.map(({ p }) => { const per = assegnatiA(p.id); return `<div class="set-riga"><span>${esc(p.nome)}
+      <div class="set-comp"><div class="set-riga set-testa"><span>Dentro</span><span>costa · vendi a</span></div>
+        ${comps.map(({ p }) => { const per = assegnatiA(p.id); return `<div class="set-riga"><span>${pezziDi(p) > 1 ? `<b>${pezziDi(p)}×</b> ` : ""}${esc(p.nome)}
           ${per.length ? `<span class="per-chi"> → ${per.map(x => esc(nomeVendita(x.v))).join(", ")}</span>` : ""}</span>
-        <span class="muted num" data-scosto-di="${p.id}">${euro(numIt(p.costo))} cad.</span></div>`; }).join("")}</div>
-      <div class="hint">Il costo del set lo divido tra i prodotti in proporzione al prezzo di catalogo.</div></div>`; }).join("");
+        <span class="num"><span class="muted" data-scosto-di="${p.id}">${euro(numIt(p.costo))}</span> · ${p.valoreSet ? euro(p.valoreSet) : "<span class='muted'>—</span>"}</span></div>`; }).join("")}</div>
+      ${tot ? `<div class="set-conto"><span>Se vendi tutto incassi <b>${euro(tot)}</b></span><span data-sguad="${d.id}" style="color:${tot - cs >= 0 ? "var(--green)" : "var(--red)"}">guadagno ${euro(Math.round((tot - cs) * 100) / 100)}</span></div>` : ""}
+      <div class="hint">Il costo lo divido tra i prodotti in base al loro prezzo di vendita: chi vale di più costa di più.</div></div>`; }).join("");
   }
   function htmlNuovoSet() {
     const n = nuovoSet;
     return `<div class="add-box set-form">
-      <div class="gift-sub" style="margin:0">Nuovo set</div>
-      <input id="ns-nome" list="dl-set" placeholder="Nome del set (es. Crema viso + crema mani)" value="${esc(n.nome)}" autocomplete="off">
-      <div class="grid2"><input id="ns-cod" class="cod-in" placeholder="Codice del set" value="${esc(n.codice)}" autocapitalize="characters" spellcheck="false" autocomplete="off">
-        <input id="ns-costo" inputmode="decimal" placeholder="Costo del set €" value="${esc(inIt(n.costo))}"></div>
-      <div class="two-col"><span class="hint" style="margin:0;align-self:center">Quanti set compri?</span><input id="ns-qta" inputmode="numeric" value="${esc(n.qta)}"></div>
-      <div class="gift-sub" style="margin:6px 0 0">Prodotti nel set e prezzo di catalogo</div>
-      ${n.comps.map((c, j) => `<div class="two-col"><input data-ncn="${j}" list="dl-prodotti" placeholder="Prodotto" value="${esc(c.nome)}" autocomplete="off">
-        <input data-ncv="${j}" inputmode="decimal" placeholder="Prezzo €" value="${esc(inIt(c.valore))}"></div>`).join("")}
+      <div class="gift-sub" style="margin:0">Set, calendario o cofanetto</div>
+      <div class="hint" style="margin:0">Scrivi quanto lo paghi e cosa c'è dentro, con il prezzo a cui venderai ogni prodotto. Il costo di ogni prodotto lo calcolo io.</div>
+      <input id="ns-nome" list="dl-set" placeholder="Nome (es. Calendario dell'Avvento 2026)" value="${esc(n.nome)}" autocomplete="off">
+      <div class="grid2"><input id="ns-cod" class="cod-in" placeholder="Codice" value="${esc(n.codice)}" autocapitalize="characters" spellcheck="false" autocomplete="off">
+        <input id="ns-costo" inputmode="decimal" placeholder="Lo paghi € (uno)" value="${esc(inIt(n.costo))}"></div>
+      <div class="two-col"><span class="hint" style="margin:0;align-self:center">Quanti ne compri?</span><input id="ns-qta" inputmode="numeric" value="${esc(n.qta)}"></div>
+      <div class="set-righe set-righe-testa"><span>Prodotto dentro</span><span>Pezzi</span><span>Vendi a €</span></div>
+      ${n.comps.map((c, j) => `<div class="set-righe"><input data-ncn="${j}" list="dl-prodotti" placeholder="Prodotto" value="${esc(c.nome)}" autocomplete="off">
+        <input data-ncp="${j}" inputmode="numeric" value="${esc(c.pezzi || 1)}" aria-label="Pezzi">
+        <input data-ncv="${j}" inputmode="decimal" placeholder="€" value="${esc(inIt(c.valore))}"></div>`).join("")}
       <button class="link" id="ns-riga" style="justify-self:start">+ Altro prodotto</button>
-      <div class="yn-b"><button id="ns-annulla">Annulla</button><button class="primary" id="ns-ok">Aggiungi il set</button></div></div>`;
+      <div class="yn-b"><button id="ns-annulla">Annulla</button><button class="primary" id="ns-ok">Aggiungi</button></div></div>`;
   }
   const leggiNuovoSet = () => {
     if (!nuovoSet || !$("#ns-nome")) return;
     nuovoSet.nome = $("#ns-nome").value; nuovoSet.codice = $("#ns-cod").value; nuovoSet.costo = $("#ns-costo").value; nuovoSet.qta = $("#ns-qta").value;
     $$("[data-ncn]").forEach(i => { nuovoSet.comps[+i.dataset.ncn].nome = i.value; });
     $$("[data-ncv]").forEach(i => { nuovoSet.comps[+i.dataset.ncv].valore = i.value; });
+    $$("[data-ncp]").forEach(i => { nuovoSet.comps[+i.dataset.ncp].pezzi = i.value; });
   };
   const setDaCatalogo = (v, qta = 1) => ({ nome: v.nome, codice: v.codiceSet || "", costo: v.costoSet ?? "", qta,
-    comps: (v.componenti || []).map(c => ({ nome: c.nome, valore: c.valore ?? "" })).concat([{ nome: "", valore: "" }]).slice(0, Math.max(2, (v.componenti || []).length)) });
+    comps: (v.componenti || []).map(c => ({ nome: c.nome, valore: c.valore ?? "", pezzi: c.pezzi || 1 })).concat([{ nome: "", valore: "", pezzi: 1 }]).slice(0, Math.max(2, (v.componenti || []).length)) });
   function aggiungiSet(n) {
     const comps = n.comps.filter(c => String(c.nome).trim());
     if (!String(n.nome).trim()) { avviso("Scrivi il nome del set"); return false; }
-    if (comps.length < 2) { avviso("Un set ha almeno due prodotti"); return false; }
+    if (comps.length < 2 && !(comps.length === 1 && (parseInt(comps[0].pezzi) || 1) > 1)) { avviso("Scrivi almeno due prodotti che ci sono dentro"); return false; }
     const info = { id: nuovoId(), nome: n.nome.trim(), codice: normCodice(n.codice), costoSet: numIt(n.costo) };
     const qta = Math.max(1, parseInt(n.qta) || 1);
-    for (const c of comps) acq.prodotti.push({ id: nuovoId(), nome: c.nome.trim(), qta, costo: 0, tipoAcquisto: "set", codice: "",
-      valoreSet: numIt(c.valore) || numIt(voceCatalogo(c.nome)?.prezzo) || 0, daSet: { ...info } });
+    for (const c of comps) { const pezzi = Math.max(1, parseInt(c.pezzi) || 1);
+      acq.prodotti.push({ id: nuovoId(), nome: c.nome.trim(), qta: qta * pezzi, pezziSet: pezzi, costo: 0, tipoAcquisto: "set", codice: "",
+        valoreSet: numIt(c.valore) || numIt(voceCatalogo(c.nome)?.prezzo) || 0, daSet: { ...info } }); }
+    if (comps.some(c => !numIt(c.valore) && !numIt(voceCatalogo(c.nome)?.prezzo))) setTimeout(() => avviso("Manca il prezzo di vendita di qualche prodotto: senza, il costo non si divide bene"), 2600);
     ricalcolaSet(info.id); segna();
     if (!info.costoSet) setTimeout(() => avviso("Ricordati di scrivere il costo del set"), 200);
     return true;
@@ -824,8 +840,7 @@ function apriAcquisto(a, opz = {}) {
             <input class="cod-in" id="np-cod" placeholder="Codice" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
           <div class="three"><input id="np-costo" inputmode="decimal" placeholder="Costo €"><input id="np-qta" inputmode="numeric" value="1" aria-label="Quanti">
             <button class="c-orange" id="np-add">＋</button></div>
-          <div class="chips small-chips"><button class="chip ${nuovaConf ? "sel" : ""}" id="np-conf">È un calendario o cofanetto</button>
-            <button class="chip" id="np-set">Aggiungi un set</button></div>
+          <button class="set-apri" id="np-set"><span class="tag-set">Set</span> Set, calendario o cofanetto <span class="muted">›</span></button>
           ${nuovaConf ? `<input id="np-valore" inputmode="decimal" placeholder="Valore a catalogo dei prodotti dentro €"><div class="hint" style="margin:0">Poi venderai i prodotti uno per uno: il costo lo calcolo io.</div>` : ""}
         </div>
         ${nuovoSet ? htmlNuovoSet() : ""}
@@ -883,14 +898,16 @@ function apriAcquisto(a, opz = {}) {
     $("#copia-codici")?.addEventListener("click", copiaCodici);
     // set già nell'ordine
     $$("[data-sq]").forEach(b => b.addEventListener("click", () => {
-      const comps = compsDi(b.dataset.sq), nuova = qtaDi(comps[0]) + Number(b.dataset.d);
-      const minimo = Math.max(1, ...comps.map(p => somma(assegnatiA(p.id), x => x.qta)));
-      if (nuova < minimo) return avviso(`Hai già assegnato ${minimo} pezzi di un prodotto del set`);
-      comps.forEach(p => { p.qta = nuova; }); segna(); disegna();
+      const comps = compsDi(b.dataset.sq), nuova = nSetDi(comps) + Number(b.dataset.d);
+      if (nuova < 1) return;
+      if (comps.some(p => somma(assegnatiA(p.id), x => x.qta) > nuova * pezziDi(p))) return avviso("Hai già assegnato alle clienti più pezzi di quelli che resterebbero");
+      comps.forEach(p => { p.qta = nuova * pezziDi(p); }); segna(); disegna();
     }));
     $$("[data-scosto]").forEach(i => i.addEventListener("input", () => {
       const sid = i.dataset.scosto; compsDi(sid).forEach(p => { p.daSet.costoSet = i.value; }); ricalcolaSet(sid); segna(); aggiornaTotale();
-      compsDi(sid).forEach(p => { const el = $(`[data-scosto-di="${p.id}"]`); if (el) el.textContent = `${euro(numIt(p.costo))} cad.`; });
+      compsDi(sid).forEach(p => { const el = $(`[data-scosto-di="${p.id}"]`); if (el) el.textContent = euro(numIt(p.costo)); });
+      const g = $(`[data-sguad="${sid}"]`), tot = valoreSetTot(compsDi(sid)), d = tot - numIt(i.value);
+      if (g) { g.textContent = `guadagno ${euro(Math.round(d * 100) / 100)}`; g.style.color = d >= 0 ? "var(--green)" : "var(--red)"; }
     }));
     $$("[data-scod]").forEach(i => i.addEventListener("input", () => { compsDi(i.dataset.scod).forEach(p => { p.daSet.codice = normCodice(i.value); }); segna(); }));
     $$("[data-xset]").forEach(b => b.addEventListener("click", () => {
@@ -904,11 +921,11 @@ function apriAcquisto(a, opz = {}) {
       segna(); disegna();
     }));
     // modulo nuovo set
-    $("#np-set")?.addEventListener("click", () => { nuovoSet ||= { nome: "", codice: "", costo: "", qta: 1, comps: [{ nome: "", valore: "" }, { nome: "", valore: "" }] }; disegna(); $("#ns-nome")?.focus(); });
+    $("#np-set")?.addEventListener("click", () => { nuovoSet ||= { nome: "", codice: "", costo: "", qta: 1, comps: [{ nome: "", valore: "", pezzi: 1 }, { nome: "", valore: "", pezzi: 1 }, { nome: "", valore: "", pezzi: 1 }] }; disegna(); $("#ns-nome")?.focus(); });
     $("#ns-nome")?.addEventListener("change", () => { leggiNuovoSet(); const v = voceSet(nuovoSet.nome); if (v) { nuovoSet = setDaCatalogo(v, nuovoSet.qta); $(".set-form")?.remove(); disegna(); } });
     $$("[data-ncn]").forEach(i => i.addEventListener("change", () => {
       const v = $(`[data-ncv="${i.dataset.ncn}"]`); const pr = voceCatalogo(i.value)?.prezzo; if (pr && !v.value) v.value = inIt(pr); }));
-    $("#ns-riga")?.addEventListener("click", () => { leggiNuovoSet(); nuovoSet.comps.push({ nome: "", valore: "" }); disegna(); $$("[data-ncn]").at(-1)?.focus(); });
+    $("#ns-riga")?.addEventListener("click", () => { leggiNuovoSet(); nuovoSet.comps.push({ nome: "", valore: "", pezzi: 1 }); disegna(); $$("[data-ncn]").at(-1)?.focus(); });
     $("#ns-annulla")?.addEventListener("click", () => { nuovoSet = null; disegna(); });
     $("#ns-ok")?.addEventListener("click", () => { leggiNuovoSet(); if (aggiungiSet(nuovoSet)) { nuovoSet = null; disegna(); } });
     $$("[data-pq]").forEach(b => b.addEventListener("click", () => {
@@ -943,7 +960,7 @@ function apriAcquisto(a, opz = {}) {
       if (nomeIn.value.trim()) { codIn.value = codiceDi(nomeIn.value, tipoNuovo); const c = costoDi(nomeIn.value, tipoNuovo); if (c !== "") costoIn.value = inIt(c);
         if (tipoNuovo === "bundle" && pezziBundleDi(nomeIn.value)) $("#np-qta").value = pezziBundleDi(nomeIn.value); }
     }));
-    $("#np-conf").addEventListener("click", () => {
+    $("#np-conf")?.addEventListener("click", () => {
       const salva = { n: nomeIn.value, c: costoIn.value, q: $("#np-qta").value, k: codIn.value };
       nuovaConf = !nuovaConf; disegna(); $("#np-nome").value = salva.n; $("#np-costo").value = salva.c; $("#np-qta").value = salva.q; $("#np-cod").value = salva.k;
     });
@@ -967,7 +984,7 @@ function apriAcquisto(a, opz = {}) {
 
   // Lista da copiare per fare l'ordine sul sito Yves Rocher
   async function copiaCodici() {
-    const righe = setsIn().map(({ info: d, comps }) => `${d.codice || "(manca il codice)"}  x${qtaDi(comps[0].p)}  Set ${d.nome}`).concat(acq.prodotti.filter(p => !p.daSet).map(p => {
+    const righe = setsIn().map(({ info: d, comps }) => `${d.codice || "(manca il codice)"}  x${nSetDi(comps.map(x => x.p))}  ${d.nome}`).concat(acq.prodotti.filter(p => !p.daSet).map(p => {
       const pb = p.tipoAcquisto === "bundle" ? pezziBundleDi(p.nome) : 0;
       const quanti = pb && qtaDi(p) % pb === 0 ? qtaDi(p) / pb : qtaDi(p);
       return `${p.codice || "(manca il codice)"}  x${quanti}  ${p.nome}${p.tipoAcquisto === "bundle" ? " (bundle)" : ""}`;
@@ -1003,7 +1020,7 @@ function apriAcquisto(a, opz = {}) {
     const codiciExtra = new Map(acq.prodotti.map(p => [p.id, { ...(p._cod || {}), [p.tipoAcquisto]: p.codice }]));
     if (nuovoSet && $("#ns-nome")) { leggiNuovoSet(); if (nuovoSet.nome.trim() && !confirm("Hai un set non ancora aggiunto: lo lascio fuori?")) return; }
     const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: numIt(p.costo), tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice),
-      ...(p.daSet ? { daSet: { id: p.daSet.id, nome: p.daSet.nome, codice: normCodice(p.daSet.codice), costoSet: numIt(p.daSet.costoSet) }, valoreSet: Number(p.valoreSet) || 0 } : {}),
+      ...(p.daSet ? { daSet: { id: p.daSet.id, nome: p.daSet.nome, codice: normCodice(p.daSet.codice), costoSet: numIt(p.daSet.costoSet) }, valoreSet: Number(p.valoreSet) || 0, pezziSet: pezziDi(p) } : {}),
       ...(p.confezione ? { confezione: { valore: numIt(p.confezione.valore) } } : {}) }));
     const dati = { ...senzaId(acq), prodotti, spedizione: numIt(acq.spedizione), arrivato: acq.arrivato !== false,
       arrivatoIl: acq.arrivato !== false ? (acq.arrivatoIl || oggi()) : null, aggiornato: new Date().toISOString() };
@@ -1018,7 +1035,10 @@ function apriAcquisto(a, opz = {}) {
     await scriviConAnnulla(mod, null);
     // ricordo costo e codici per la prossima volta
     for (const { info: d, comps } of setsIn()) setDoc(doc(col("catalogo"), slug("set " + d.nome)), { nome: d.nome, tipo: "set",
-      codiceSet: normCodice(d.codice) || null, costoSet: numIt(d.costoSet) || null, componenti: comps.map(({ p }) => ({ nome: p.nome, valore: Number(p.valoreSet) || 0 })) }, { merge: true });
+      codiceSet: normCodice(d.codice) || null, costoSet: numIt(d.costoSet) || null, componenti: comps.map(({ p }) => ({ nome: p.nome, valore: Number(p.valoreSet) || 0, pezzi: pezziDi(p) })) }, { merge: true });
+    // il prezzo di vendita dei prodotti del set diventa il prezzo suggerito quando li vendi
+    for (const { comps } of setsIn()) for (const { p } of comps) if (p.valoreSet && !voceCatalogo(p.nome)?.prezzo)
+      setDoc(doc(col("catalogo"), slug(p.nome)), { nome: p.nome, prezzo: Number(p.valoreSet) }, { merge: true });
     for (const p of prodotti) {
       if (p.daSet) continue;
       const agg = { nome: p.nome };
@@ -1114,7 +1134,7 @@ function apriVendita(v, opz = {}) {
       u.qta += qtaDi(r); u.valore += (Number(r.prezzo) || 0) * qtaDi(r); m.set(k, u); }
     return m;
   };
-  const disponibili = () => magazzino(acquisti, vendite, { escludiVenditaId: v?.id, usoExtra: usoCorrente() });
+  const disponibili = () => magazzino(acquisti, vendite, { escludiVenditaId: v?.id, usoExtra: usoCorrente(), ancheInArrivo: true });
   const indice = () => indiceProdotti(acquisti);
 
   function prendiDalMagazzino(g, prezzo) {
@@ -1126,7 +1146,7 @@ function apriVendita(v, opz = {}) {
       const uguale = ven.righe.find(r => r.fonte && r.fonte.acquistoId === fonte.acquistoId && r.fonte.prodottoId === fonte.prodottoId);
       if (uguale) uguale.qta = qtaDi(uguale) + 1;
       else ven.righe.push({ id: nuovoId(), nome: g.nome, qta: 1, fonte, consegnato: mia() && f.arrivato,
-        prezzo: mia() ? Math.round(f.costoPezzo * 100) / 100 : (voceCatalogo(g.nome)?.prezzo ?? "") });
+        prezzo: mia() ? Math.round(f.costoPezzo * 100) / 100 : (voceCatalogo(g.nome)?.prezzo ?? (indice().get(`${f.acquistoId}:${f.prodottoId}`)?.prodotto.valoreSet || "")) });
     }
     segna();
   }
@@ -1197,16 +1217,16 @@ function apriVendita(v, opz = {}) {
         ${v || opz.clienteId ? `<button class="pill c-blue" id="cambia-chi" style="margin:0 0 10px">${esc(nomeVendita(ven))} · Cambia</button>` : ""}
         ${ven.clienteId === STORICO ? `<div class="banner" style="display:block">Ordine di gruppo dal vecchio file.<div class="actions" style="margin-top:8px"><button class="c-gold" id="dividi">Dividi tra le clienti</button></div></div>` : ""}
         <div class="items">${ven.righe.map((r, i) => { const daOrd = rigaDaOrdinare(r), c = costoRiga(r, idx); return `<div class="item riga-ven">
-            <div class="i-name"><b>${esc(nomeArt(r))}</b><br><span class="tag-${daOrd ? "ordinare" : "scorta"}">${daOrd ? "da ordinare" : r.fonte && acquistoDi(r.fonte.acquistoId)?.prodotti.find(p => p.id === r.fonte.prodottoId)?.confezione ? "dalla confezione" : "dal magazzino"}</span>
+            <div class="i-name"><b>${esc(nomeArt(r))}</b><br><span class="tag-${daOrd ? "ordinare" : "scorta"}">${daOrd ? "da ordinare" : r.fonte && acquistoDi(r.fonte.acquistoId)?.prodotti.find(p => p.id === r.fonte.prodottoId)?.confezione ? "dalla confezione" : acquistoDi(r.fonte?.acquistoId)?.arrivato === false ? "in arrivo" : "dal magazzino"}</span>
               ${mia() && c !== null ? `<span class="muted" style="font-size:13px"> · costo ${euro(c)}</span>` : ""}</div>
             ${mia() ? "" : `<input class="prezzo-in" data-pr="${i}" inputmode="decimal" value="${esc(inIt(r.prezzo))}" placeholder="€" aria-label="Prezzo a pezzo">`}
             <div class="stepper mini"><button data-rq="${i}" data-d="-1">−</button><b>${qtaDi(r)}</b><button data-rq="${i}" data-d="1">＋</button></div>
           </div>`; }).join("")}</div>
 
-        ${disp.length ? `<div class="scorta-box"><div class="gift-sub" style="margin-top:0">Nel tuo magazzino</div>
+        ${disp.length ? `<div class="scorta-box"><div class="gift-sub" style="margin-top:0">${disp.every(g => g.inArrivo >= g.disponibili) ? "In arrivo" : disp.some(g => g.inArrivo) ? "In magazzino o in arrivo" : "Nel tuo magazzino"}</div>
           <div class="chips small-chips">${disp.map((g, i) => g.confezione
             ? `<button class="chip scorta ${inAttesaConf?.gruppo && chiave(inAttesaConf.gruppo.nome) === chiave(g.nome) ? "sel" : ""}" data-mag="${i}">${esc(g.nome)} <span class="muted">· ancora ${euro(g.disponibili)}</span></button>`
-            : `<button class="chip scorta" data-mag="${i}">${esc(g.nome)} <span class="muted">· ${g.disponibili}${g.inArrivo ? "" : ""}</span></button>`).join("")}</div>
+            : `<button class="chip scorta" data-mag="${i}">${esc(g.nome)} <span class="muted">· ${g.inArrivo >= g.disponibili ? `${g.disponibili} in arrivo` : g.inArrivo ? `${g.disponibili - g.inArrivo} + ${g.inArrivo} in arrivo` : g.disponibili}</span></button>`).join("")}</div>
           ${inAttesaConf ? `<div class="add-box" style="margin-top:10px;box-shadow:none"><div class="tag-scorta big-tag">Dal ${esc(inAttesaConf.gruppo.nome)} <button class="x-mini" id="annulla-conf">×</button></div>
             <input id="conf-nome" placeholder="Quale prodotto? Es. siero" autocomplete="off" list="dl-prodotti">
             <div class="two-col"><input id="conf-prezzo" inputmode="decimal" placeholder="${mia() ? "Valore a catalogo €" : "Prezzo di vendita €"}"><button class="c-orange" id="conf-add">＋ Aggiungi</button></div></div>` : ""}
@@ -1881,7 +1901,7 @@ function renderSoldi() {
   const sposta = (k, d) => { const [y, m] = k.split("-").map(Number); return new Date(Date.UTC(y, m - 1 + d, 1)).toISOString().slice(0, 7); };
   const ultimo = oggi().slice(0, 7);
   const m = riepilogo(acquisti, vendite, meseSel), tot = riepilogo(acquisti, vendite);
-  const merce = valoreMagazzino(acquisti, vendite);
+  const merce = valoreMagazzino(acquisti, vendite), merceArrivo = valoreInArrivo(acquisti, vendite);
   const mesi = mesiPresenti(acquisti, vendite).map(k => ({ k, ...riepilogo(acquisti, vendite, k) }));
   const max = Math.max(1, ...mesi.map(x => Math.abs(x.guadagno)));
   const tile = (cls, ico, val, lbl) => `<div class="tile ${cls}"><div class="t-ico">${ico}</div><div class="t-val num">${euro(val)}</div><div class="t-lbl">${lbl}</div></div>`;
@@ -1915,7 +1935,7 @@ function renderSoldi() {
       <div class="money-row"><span>Speso per te</span><b class="num">${euro(tot.spesoPerMe)}</b></div>
       <div class="money-row"><span>Merce ancora in casa</span><b class="num">${euro(merce)}</b></div>
       <div class="money-row"><span><b>Guadagno</b></span><b class="num" style="color:${tot.guadagno >= 0 ? "var(--green)" : "var(--red)"}">${euro(tot.guadagno)}</b></div>
-      <div class="hint">Dove sono finiti i soldi spesi: ${euro(tot.costoVenduto)} in prodotti venduti, ${euro(tot.spesoPerMe)} per te, ${euro(merce)} in magazzino.</div>
+      <div class="hint">Dove sono finiti i soldi spesi: ${euro(tot.costoVenduto)} in prodotti venduti, ${euro(tot.spesoPerMe)} per te, ${euro(merce)} in magazzino${merceArrivo ? `, ${euro(merceArrivo)} ancora in arrivo` : ""}.</div>
     </div>
 
     <div class="section"><h2>Mese per mese</h2></div>
@@ -1951,7 +1971,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v24</p>`;
+    <p class="versione" style="text-align:center">v27</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });

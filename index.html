@@ -13,12 +13,12 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css?v=24">
+<link rel="stylesheet" href="styles.css?v=27">
 </head>
 <body>
   <!-- Visibile solo se JavaScript non viene eseguito (anteprima File/Finder, Quick Look) -->
   <div id="avvio" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif;color:#1f2a22">
-    <h2 style="margin-top:0;color:#2F4B3C">Ordini Beauty · versione 24</h2>
+    <h2 style="margin-top:0;color:#2D6A3E">Ordini Beauty · versione 27</h2>
     <p>Se leggi questo messaggio, la pagina è aperta in un'anteprima che non esegue l'app
       (anteprima di File o Finder, Quick Look, allegato di un'email).</p>
     <p>Apri invece l'indirizzo web dell'app in <b>Safari</b>, quello che inizia con
@@ -28,7 +28,13 @@
   <!-- Login -->
   <section id="login" class="screen hidden">
     <div class="login-box">
-      <div class="login-logo"><svg viewBox="0 0 48 48" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="24" cy="24" r="22"/><path d="M24 36V17M24 23c-5-1-8-4-9-9 5 0 8 3 9 9zM24 28c5-1 8-4 9-9-5 0-8 3-9 9z"/></svg></div>
+      <div class="login-logo"><svg viewBox="0 0 512 512" width="76" height="76" style="border-radius:18px" aria-hidden="true"><rect width="512" height="512" fill="#2D6A3E"/>
+<path d="M256 92C214 168 172 226 172 300a84 84 0 0 0 168 0c0-74-42-132-84-208z" fill="none" stroke="#F5F3EE" stroke-width="10"/>
+<g fill="none" stroke="#C9B48A" stroke-width="7" stroke-linecap="round">
+<path d="M172 300c-40 0-70 30-60 66s54 34 56 6-30-26-30-8"/>
+<path d="M340 300c40 0 70 30 60 66s-54 34-56 6 30-26 30-8"/></g>
+<g fill="#F5F3EE"><path d="M256 360c-6-36-30-60-62-62 2 34 28 58 62 62z"/><path d="M256 360c6-36 30-60 62-62-2 34-28 58-62 62z"/>
+<path d="M256 362c-14-40-14-80 0-114 14 34 14 74 0 114z"/></g></svg></div>
       <h1>Ordini Beauty</h1>
       <p class="muted">Clienti, ordini e guadagni</p>
       <form id="login-form">
@@ -39,7 +45,7 @@
         <button type="button" id="btn-reset" class="link small-link">Password dimenticata</button>
         <p id="login-error" class="error"></p>
       </form>
-      <p class="versione">v24</p>
+      <p class="versione">v27</p>
     </div>
   </section>
 
@@ -71,7 +77,7 @@
 
   <!-- Diagnosi: se l'app non parte, mostra il motivo invece della pagina bianca -->
   <section id="diagnosi" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;font:16px/1.5 -apple-system,sans-serif">
-    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v24)</h2>
+    <h2 style="color:#b3261e;margin-top:0">L'app non è riuscita ad avviarsi (v27)</h2>
     <div id="diagnosi-testo"></div>
   </section>
   <script>
@@ -99,6 +105,6 @@
       document.getElementById("diagnosi").classList.remove("hidden");
     }, 5000);
   </script>
-  <script type="module" src="app.js?v=24"></script>
+  <script type="module" src="app.js?v=27"></script>
 </body>
 </html>

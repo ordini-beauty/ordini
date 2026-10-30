@@ -2,7 +2,8 @@
 //
 // ACQUISTO (ordine a Yves Rocher)
 //   { id, data, numeroOrdine, note, arrivato, arrivatoIl, spedizione, omaggiRicevuti:[{nome,qta}],
-//     prodotti: [{ id, nome, qta, costo /*a pezzo*/, confezione?: { valore /*catalogo a confezione*/ } }] }
+//     prodotti: [{ id, nome, qta, costo /*a pezzo*/, confezione?: { valore } /*vecchi calendari*/,
+//                  daSet?: { id, nome, codice, costoSet }, valoreSet /*prezzo di vendita*/, pezziSet /*pezzi in un set*/ }] }
 // VENDITA (ordine di una cliente, oppure "Per me")
 //   { id, data, clienteId (o IO o STORICO + clientiStorico), pagato, pagatoIl, note, sconto,
 //     omaggiDati:[{nome,qta}], riacquistoGiorni,
@@ -11,7 +12,7 @@
 //               costo?: numero                       // costo a pezzo noto senza fonte (solo dati convertiti)
 //            }] }
 //   Riga senza fonte e senza costo = "da ordinare" (richiesta della cliente non ancora acquistata).
-import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=24";
+import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=27";
 
 export { IO, STORICO, chiave };
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -103,6 +104,7 @@ export function magazzino(acquisti, vendite, opz = {}) {
   const gruppi = new Map();
   const ordinati = [...acquisti].sort((a, b) => String(a.data || "").localeCompare(String(b.data || "")));
   for (const a of ordinati) for (const p of a.prodotti || []) {
+    if (a.arrivato === false && !opz.ancheInArrivo) continue;   // entra in magazzino solo quando è arrivato
     const k = `${a.id}:${p.id}`, x = indice.get(k);
     const u = uso.get(k) || { qta: 0, valore: 0 }, e = extra.get(k) || { qta: 0, valore: 0 };
     const conf = !!p.confezione;
@@ -122,6 +124,8 @@ export function magazzino(acquisti, vendite, opz = {}) {
     .map(g => ({ ...g, disponibili: g.confezione ? r2(g.disponibili) : Math.round(g.disponibili), costoTot: r2(g.costoTot) }))
     .sort((a, b) => (b.confezione - a.confezione) || a.nome.localeCompare(b.nome, "it"));
 }
+// merce ordinata, non ancora arrivata e non ancora assegnata
+export const valoreInArrivo = (acquisti, vendite) => r2(magazzino(acquisti, vendite, { ancheInArrivo: true }).reduce((s, g) => s + (g.inArrivo ? g.costoTot * Math.min(1, g.inArrivo / g.disponibili) : 0), 0));
 export const valoreMagazzino = (acquisti, vendite) => r2(magazzino(acquisti, vendite).reduce((s, g) => s + g.costoTot, 0));
 
 // ---------- Riepiloghi ----------

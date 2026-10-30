@@ -11,15 +11,15 @@
   --line-strong: #D2CDC1;
   --field: #FBFAF7;
 
-  --primary: #2F4B3C;  --primary-ink: #FFFFFF; --primary-soft: #E8EDE9;
-  --green: #2F6B4F;    --green-soft: #E6EFE9;     /* guadagno, fatto */
+  --primary: #2D6A3E;  --primary-ink: #FFFFFF; --primary-soft: #E4EEE6;   /* verde in stile Yves Rocher (approssimato) */
+  --green: #2D6A3E;    --green-soft: #E4EEE6;     /* guadagno, fatto */
   --orange: #9E6A2E;   --orange-soft: #F4ECE0;    /* consegne, magazzino */
   --pink: #8A4458;     --pink-soft: #F3E8EB;      /* incassi, per me */
   --purple: #5D5884;   --purple-soft: #ECEAF2;    /* clienti da sentire, in arrivo */
   --gold: #8E6E3C;     --gold-soft: #F3EDE2;      /* omaggi, avvisi */
   --blue: #3D5D78;     --blue-soft: #E6ECF1;      /* ordini, codici */
   --red: #A23E2E;
-  --wa: #2F6B4F;       --wa-soft: #E6EFE9;
+  --wa: #2D6A3E;       --wa-soft: #E4EEE6;
 
   --serif: "Cormorant Garamond", "Iowan Old Style", "Palatino", Georgia, serif;
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -29,15 +29,15 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #121513; --card: #1A1E1B; --text: #ECEBE6; --muted: #9CA39D; --line: #2A302C; --line-strong: #3A413C; --field: #161A17;
-    --primary: #9DBFAA; --primary-ink: #0F1511; --primary-soft: #1F2A23;
-    --green: #8FC2A2;  --green-soft: #1C2A21;
+    --primary: #8CC79A; --primary-ink: #0E1710; --primary-soft: #1B2B1F;
+    --green: #8CC79A;  --green-soft: #1B2B1F;
     --orange: #D9A56B; --orange-soft: #2A2218;
     --pink: #D79AAB;   --pink-soft: #2C1D23;
     --purple: #ABA6D3; --purple-soft: #23222E;
     --gold: #CDAE79;   --gold-soft: #29241A;
     --blue: #93B3CC;   --blue-soft: #1B242C;
     --red: #E08F80;
-    --wa: #8FC2A2;     --wa-soft: #1C2A21;
+    --wa: #8CC79A;     --wa-soft: #1B2B1F;
     --shadow: none;
   }
 }
@@ -400,3 +400,11 @@ details.storia summary { padding: 10px 0 4px; font-size: 14px; font-weight: 600;
 .top-nome b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-nome .sub { font-size: 12.5px; color: var(--muted); }
 .top-val { font-size: 15px; }
+.set-righe { display: grid; grid-template-columns: 1fr 56px 84px; gap: 6px; }
+.set-righe input[data-ncp], .set-righe input[data-scp] { text-align: center; }
+.set-righe-testa { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin: 6px 0 -2px; }
+.set-testa { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+.set-conto { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 14px; }
+.set-conto span:last-child { font-weight: 600; }
+.set-apri { width: 100%; display: flex; align-items: center; gap: 8px; justify-content: flex-start; background: transparent; border: 1px dashed var(--line); color: var(--text); font-weight: 500; padding: 11px 12px; }
+.set-apri .muted { margin-left: auto; }
