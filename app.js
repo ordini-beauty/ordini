@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=39";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=39";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=40";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=40";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=39";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=40";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -1424,8 +1424,7 @@ function apriVendita(v, opz = {}) {
   function indietro() {
     if (passo === "stato") passo = "cosa";
     else if (passo === "cosa" && !v && !opz.clienteId) passo = "chi";
-    else if (passo === "chi" && ven.righe.length) passo = "cosa";
-    else return chiudiSheet();
+    else return chiudiSheet();            // dal primo passo si esce (chiede conferma se c'è qualcosa di non salvato)
     disegna();
   }
 
@@ -1434,7 +1433,7 @@ function apriVendita(v, opz = {}) {
     const recenti = new Set(vendite.map(x => x.clienteId));
     const ordinate = [...clienti].sort((a, b) => (recenti.has(b.id) - recenti.has(a.id)) || a.nome.localeCompare(b.nome, "it"));
     const filtrate = ordinate.filter(c => !cercaChi || chiave(c.nome).includes(chiave(cercaChi))).slice(0, 40);
-    $("#sheet-body").innerHTML = testataSheet(v ? "Vendita" : "Ordine di una cliente", !!ven.righe.length, 1, true) + `
+    $("#sheet-body").innerHTML = testataSheet(v ? "Vendita" : "Ordine di una cliente", false, 1, true) + `
       <div class="sh-main">
         <div class="question">Per chi è?</div>
         <p class="q-hint">Tocca il nome della cliente, oppure “Per me” se è per te.</p>
@@ -2248,7 +2247,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v39</p>`;
+    <p class="versione" style="text-align:center">v40</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
