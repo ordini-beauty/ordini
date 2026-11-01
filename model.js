@@ -14,7 +14,7 @@
 //               costo?: numero                       // costo a pezzo noto senza fonte (solo dati convertiti)
 //            }] }
 //   Riga senza fonte e senza costo = "da ordinare" (richiesta della cliente non ancora acquistata).
-import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=34";
+import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=35";
 
 export { IO, STORICO, chiave };
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -23,23 +23,28 @@ export const isMia = (v) => v.clienteId === IO;
 const chiaveFonte = (f) => f ? `${f.acquistoId}:${f.prodottoId}` : null;
 
 // ---------- Acquisti ----------
+// Prodotti "aperti": un calendario/cofanetto comprato come prodotto unico e poi aperto per venderne il contenuto.
+// Il prodotto grande tiene "aperti: n"; ciò che c'era dentro ha "apertoDa: id del prodotto grande" e si prende
+// una parte del suo costo, in proporzione al prezzo di vendita. Non entra nella divisione del totale dell'ordine.
+const dalContenuto = (p) => !!p.apertoDa;
+const fuoriConto = (p) => p.regalo || dalContenuto(p);
 // ordine segnato col solo totale: quello della fattura, o una stima finché la fattura non arriva
 const totaleFattura = (a) => Number(a.totalePagato) || Number(a.totaleStimato) || 0;
 export const aTotale = (a) => totaleFattura(a) > 0;
 export const fatturaInAttesa = (a) => !(Number(a.totalePagato) > 0) && Number(a.totaleStimato) > 0;
 export function totaleAcquisto(a) {
   if (aTotale(a)) return r2(totaleFattura(a));
-  return r2((a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : Number(p.costo) || 0) * qtaDi(p), 0) + (Number(a.spedizione) || 0));
+  return r2((a.prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : Number(p.costo) || 0) * qtaDi(p), 0) + (Number(a.spedizione) || 0));
 }
 // prezzo di vendita a pezzo usato per dividere il totale (per i vecchi calendari: valore della confezione)
 export const valoreVendita = (p) => p.confezione ? (Number(p.confezione.valore) || 0) : (Number(p.prezzo) || Number(p.valoreSet) || 0);
 // costo a pezzo di ogni prodotto quando si conosce solo il totale: si divide in proporzione al prezzo di vendita
 export function costiDaTotale(a) {
   const T = totaleFattura(a), prodotti = a.prodotti || [];
-  const pagati = prodotti.filter(p => !p.regalo);            // i regali di Yves Rocher non costano nulla
+  const pagati = prodotti.filter(p => !fuoriConto(p));       // i regali non costano; il contenuto aperto prende il costo dal prodotto grande
   const pesoTot = pagati.reduce((s, p) => s + valoreVendita(p) * qtaDi(p), 0);
   const pezzi = pagati.reduce((s, p) => s + qtaDi(p), 0);
-  return new Map(prodotti.map(p => [p.id, p.regalo ? 0 : pesoTot > 0 ? T * valoreVendita(p) / pesoTot : (pezzi ? T / pezzi : 0)]));
+  return new Map(prodotti.map(p => [p.id, fuoriConto(p) ? 0 : pesoTot > 0 ? T * valoreVendita(p) / pesoTot : (pezzi ? T / pezzi : 0)]));
 }
 
 // Indice dei prodotti acquistati con il costo a pezzo comprensivo della spedizione (ripartita sul valore)
@@ -47,13 +52,24 @@ export function indiceProdotti(acquisti) {
   const m = new Map();
   for (const a of acquisti) {
     const daTot = aTotale(a) ? costiDaTotale(a) : null;
-    const base = (a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : Number(p.costo) || 0) * qtaDi(p), 0);
+    const base = (a.prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : Number(p.costo) || 0) * qtaDi(p), 0);
     const sped = Number(a.spedizione) || 0;
     for (const p of a.prodotti || []) {
+      if (dalContenuto(p)) continue;
       const costo = p.regalo ? 0 : Number(p.costo) || 0;
       const costoPezzo = p.regalo ? 0 : daTot ? daTot.get(p.id) : costo + (base > 0 ? sped * costo / base : 0);
       m.set(`${a.id}:${p.id}`, { acquisto: a, prodotto: p, costoPezzo,
         valoreConf: p.confezione ? (Number(p.confezione.valore) || 0) * qtaDi(p) : 0 });
+    }
+    // contenuto dei prodotti aperti: costo di un prodotto grande × (prezzo del pezzo ÷ valore di tutto il contenuto)
+    for (const p of a.prodotti || []) {
+      if (!dalContenuto(p)) continue;
+      const padre = m.get(`${a.id}:${p.apertoDa}`), fratelli = (a.prodotti || []).filter(x => x.apertoDa === p.apertoDa);
+      const valoreUno = fratelli.reduce((s, x) => s + (Number(x.valoreSet) || 0) * Math.max(1, Number(x.pezziSet) || 1), 0);
+      const pezziUno = fratelli.reduce((s, x) => s + Math.max(1, Number(x.pezziSet) || 1), 0);
+      const costoPadre = padre ? padre.costoPezzo : 0;
+      const costoPezzo = valoreUno > 0 ? costoPadre * (Number(p.valoreSet) || 0) / valoreUno : (pezziUno ? costoPadre / pezziUno : 0);
+      m.set(`${a.id}:${p.id}`, { acquisto: a, prodotto: p, costoPezzo, valoreConf: 0 });
     }
   }
   return m;
@@ -64,10 +80,10 @@ export function stimaTotale(acquisti, prodotti, escludiId) {
   let pagato = 0, valore = 0;
   for (const a of acquisti) {
     if (a.id === escludiId || !(Number(a.totalePagato) > 0)) continue;
-    const v = (a.prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : valoreVendita(p) * qtaDi(p)), 0);
+    const v = (a.prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : valoreVendita(p) * qtaDi(p)), 0);
     if (v > 0) { pagato += Number(a.totalePagato); valore += v; }
   }
-  const mio = (prodotti || []).reduce((s, p) => s + (p.regalo ? 0 : valoreVendita(p) * qtaDi(p)), 0);
+  const mio = (prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : valoreVendita(p) * qtaDi(p)), 0);
   if (!mio) return { totale: 0, rapporto: null };
   const rapporto = valore > 0 ? pagato / valore : 0.75;  // senza storia: sconto consulente del 25%
   return { totale: r2(mio * rapporto), rapporto: valore > 0 ? rapporto : null };
@@ -140,7 +156,7 @@ export function magazzino(acquisti, vendite, opz = {}) {
     const k = `${a.id}:${p.id}`, x = indice.get(k);
     const u = uso.get(k) || { qta: 0, valore: 0 }, e = extra.get(k) || { qta: 0, valore: 0 };
     const conf = !!p.confezione;
-    const disp = conf ? x.valoreConf - u.valore - e.valore : qtaDi(p) - u.qta - e.qta;
+    const disp = conf ? x.valoreConf - u.valore - e.valore : qtaDi(p) - (Number(p.aperti) || 0) - u.qta - e.qta;
     const g = chiave(p.nome) + (conf ? "#conf" : "");
     if (!gruppi.has(g)) gruppi.set(g, { nome: p.nome, confezione: conf, disponibili: 0, costoTot: 0, fonti: [], inArrivo: 0 });
     const G = gruppi.get(g);
