@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=40";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=40";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=41";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=41";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=40";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=41";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -724,6 +724,16 @@ function apriProdottoCatalogo(v) {
   apriSheet();
 }
 
+// da quale set/calendario arrivano i pezzi (per ritrovarli in magazzino)
+function provenienza(g) {
+  const da = new Set();
+  for (const f of g.fonti) {
+    const a = acquistoDi(f.acquistoId), p = a?.prodotti.find(x => x.id === f.prodottoId); if (!p) continue;
+    if (p.daSet) da.add(p.daSet.nome);
+    else if (p.apertoDa) { const padre = a.prodotti.find(x => x.id === p.apertoDa); if (padre) da.add(padre.nome); }
+  }
+  return da.size ? `dentro: ${[...da].join(", ")}` : "";
+}
 // si può aprire un prodotto unico, non ciò che viene già da un set o da un'apertura
 const apribile = (g) => !g.confezione && g.fonti.some(f => { const p = acquistoDi(f.acquistoId)?.prodotti.find(x => x.id === f.prodottoId); return p && !p.daSet && !p.apertoDa; });
 function htmlMagazzino() {
@@ -733,17 +743,25 @@ function htmlMagazzino() {
     <div class="v num" style="font-size:36px">${euro(valore)}</div><div style="font-size:14px;opacity:.85">al prezzo che l'hai pagata · ancora da vendere o usare</div></div>`;
   const arrivo = magazzino(acquisti, vendite, { ancheInArrivo: true }).reduce((n, x) => n + (x.confezione ? 0 : x.inArrivo), 0);
   const notaArrivo = arrivo ? `<div class="hint" style="margin:0 4px 12px">${arrivo === 1 ? "1 prodotto è" : arrivo + " prodotti sono"} in arrivo: entrano qui quando segni l'ordine come arrivato.</div>` : "";
-  if (!g.length) return h + notaArrivo + `<div class="empty"><div class="e-ico"></div><b>Magazzino vuoto</b><br>Qui finiscono i prodotti arrivati e non ancora dati a nessuno.</div>`;
   h += notaArrivo;
+  // calendari/cofanetti già aperti: non spariscono, si vede cosa resta di ognuno
+  const usoAperti = new Map(); for (const v of vendite) for (const r of v.righe || []) if (r.fonte) { const k = `${r.fonte.acquistoId}:${r.fonte.prodottoId}`; usoAperti.set(k, (usoAperti.get(k) || 0) + qtaDi(r)); }
+  const aperti = acquisti.filter(a => a.arrivato !== false).flatMap(a => (a.prodotti || []).filter(p => p.aperti).map(p => ({ a, p,
+    dentro: a.prodotti.filter(x => x.apertoDa === p.id).map(x => ({ nome: x.nome, resta: qtaDi(x) - (Number(x.tolti) || 0) - (usoAperti.get(`${a.id}:${x.id}`) || 0) })) })));
+  const htmlAperti = aperti.length ? `<div class="section"><h2>Aperti</h2><span class="count c-gold">${aperti.length}</span></div>` + aperti.map(({ a, p, dentro }) =>
+    `<div class="card b-gold"><h3>${esc(p.nome)}</h3><div class="sub">ordine del ${dataLunga(a.data)} · ${p.aperti === 1 ? "1 aperto" : p.aperti + " aperti"}</div>
+      <div class="sub" style="margin-top:6px">${dentro.map(d => `${esc(d.nome)}: ${d.resta > 0 ? `<b>${d.resta}</b> in magazzino` : "venduto"}`).join(" · ")}</div></div>`).join("") : "";
   g.forEach((x, i) => {
     h += `<div class="card b-orange"><div class="row"><div><h3>${x.confezione ? "" : ""}${esc(x.nome)}</h3>
-        <div class="sub">${x.confezione ? `ancora ${euro(x.disponibili)} di prodotti dentro` : `costo ${euro(x.costoTot / x.disponibili)} a pezzo`}${x.inArrivo ? " · in arrivo" : ""}</div></div>
+        <div class="sub">${x.confezione ? `ancora ${euro(x.disponibili)} di prodotti dentro` : `costo ${euro(x.costoTot / x.disponibili)} a pezzo`}${x.inArrivo ? " · in arrivo" : ""}</div>
+        ${provenienza(x) ? `<div class="sub" style="color:var(--gold)">${esc(provenienza(x))}</div>` : ""}</div>
         <div class="amount num" style="color:var(--orange)">${x.confezione ? "" : `${x.disponibili} pz`}</div></div>
       <div class="actions"><button class="c-blue" data-vendi="${i}">Vendi o usa</button>${x.confezione ? "" : `<button data-togli="${i}">Togli 1</button>`}
 </div>
       ${apribile(x) ? `<button class="link link-piccolo" data-apri-mag="${i}">È un calendario o un cofanetto? Aprilo e vendi cosa c'è dentro</button>` : ""}</div>`;
   });
-  return h;
+  if (!g.length) h += `<div class="empty"><div class="e-ico"></div><b>Magazzino vuoto</b><br>Qui finiscono i prodotti arrivati e non ancora dati a nessuno.</div>`;
+  return h + htmlAperti;
 }
 
 // ---------- Togliere un pezzo dal magazzino ----------
@@ -1486,7 +1504,8 @@ function apriVendita(v, opz = {}) {
         ${ven.clienteId === STORICO ? `<div class="banner" style="display:block">Ordine di gruppo dal vecchio file.<div class="actions" style="margin-top:8px"><button class="c-gold" id="dividi">Dividi tra le clienti</button></div></div>` : ""}
         <div class="items">${ven.righe.map((r, i) => { const daOrd = rigaDaOrdinare(r), c = costoRiga(r, idx); return `<div class="item riga-ven">
             <div class="i-name"><b>${esc(nomeArt(r))}</b><br><span class="tag-${daOrd ? "ordinare" : "scorta"}">${daOrd ? "da ordinare" : r.fonte && acquistoDi(r.fonte.acquistoId)?.prodotti.find(p => p.id === r.fonte.prodottoId)?.confezione ? "dalla confezione" : acquistoDi(r.fonte?.acquistoId)?.arrivato === false ? "in arrivo" : "dal magazzino"}</span>
-              ${mia() && c !== null ? `<span class="muted" style="font-size:13px"> · costo ${euro(c)}</span>` : ""}</div>
+              ${mia() && c !== null ? `<span class="muted" style="font-size:13px"> · costo ${euro(c)}</span>` : ""}
+              ${daOrd && disp.some(g => !g.confezione && chiave(g.nome) === chiave(r.nome) && g.disponibili - g.inArrivo >= qtaDi(r)) ? `<button class="link link-piccolo" data-collega="${i}">Ce l'hai in magazzino: prendilo da lì</button>` : ""}</div>
             ${mia() ? "" : `<input class="prezzo-in" data-pr="${i}" inputmode="decimal" value="${esc(inIt(r.prezzo))}" placeholder="€" aria-label="Prezzo a pezzo">`}
             <div class="stepper mini"><button data-rq="${i}" data-d="-1">−</button><b>${qtaDi(r)}</b><button data-rq="${i}" data-d="1">＋</button></div>
           </div>`; }).join("")}</div>
@@ -1520,6 +1539,12 @@ function apriVendita(v, opz = {}) {
     $("#dividi")?.addEventListener("click", () => { if (modificato && !confirm("Le modifiche non salvate andranno perse. Continuo?")) return; sheetChiudi = null; apriDividi(v); });
     $$("[data-pr]").forEach(i => i.addEventListener("input", () => { ven.righe[+i.dataset.pr].prezzo = i.value; segna();
       const t = Math.max(0, somma(ven.righe, r => numIt(r.prezzo) * qtaDi(r)) - numIt(ven.sconto)); if ($(".total-line b")) $(".total-line b").textContent = euro(t); }));
+    // una richiesta "da ordinare" che in realtà è già in magazzino (es. dal contenuto di un calendario)
+    $$("[data-collega]").forEach(b => b.addEventListener("click", () => {
+      const r = ven.righe[+b.dataset.collega], g = disp.find(x => !x.confezione && chiave(x.nome) === chiave(r.nome));
+      const f = g?.fonti.find(x => x.arrivato && x.disponibili >= qtaDi(r)); if (!f) return avviso("Non ce n'è abbastanza in magazzino");
+      r.fonte = { acquistoId: f.acquistoId, prodottoId: f.prodottoId }; segna(); passoCosa(); avviso(`${r.nome}: preso dal magazzino`);
+    }));
     $$("[data-rq]").forEach(b => b.addEventListener("click", () => {
       const r = ven.righe[+b.dataset.rq], d = Number(b.dataset.d);
       if (d > 0 && r.fonte) {
@@ -2247,7 +2272,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v40</p>`;
+    <p class="versione" style="text-align:center">v41</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
