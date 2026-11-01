@@ -436,3 +436,6 @@ button.rapido::before { content: "→"; opacity: .8; }
   padding: 14px 16px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); color: var(--text); font-weight: 400; }
 .scelta-grande b { font-weight: 600; font-size: 15.5px; }
 .scelta-grande span { font-size: 13.5px; color: var(--muted); }
+.bil-righe { margin-top: 12px; text-align: left; }
+.bil-righe > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.bil-righe span { color: var(--muted); }

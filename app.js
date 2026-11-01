@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=44";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=44";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=45";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=45";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=44";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=45";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -2287,6 +2287,15 @@ function renderSoldi() {
     ${htmlClassifica(meseSel + "-15")}
 
     <div class="section"><h2>Da sempre</h2></div>
+    ${(() => { const bil = Math.round((tot.incassato - tot.spesoAcquisti) * 100) / 100, conCrediti = Math.round((bil + tot.daIncassare) * 100) / 100;
+      return `<div class="big-money ${bil >= 0 ? "c-green" : "c-pink"}" style="padding:18px"><div>Bilancio da sempre</div>
+        <div class="v num" style="font-size:40px">${bil > 0 ? "+" : ""}${euro(bil)}</div>
+        <div style="font-size:14px;color:var(--muted)">incassato dalle clienti meno speso in acquisti Yves Rocher</div>
+        <div class="bil-righe">
+          ${tot.daIncassare ? `<div><span>Quando ti pagano quello che ti devono (${euro(tot.daIncassare)})</span><b class="num">${conCrediti > 0 ? "+" : ""}${euro(conCrediti)}</b></div>` : ""}
+          ${merce ? `<div><span>In casa hai ancora merce pagata</span><b class="num">${euro(merce)}</b></div>` : ""}
+          ${tot.spesoPerMe ? `<div><span>Prodotti presi per te</span><b class="num">${euro(tot.spesoPerMe)}</b></div>` : ""}
+        </div></div>`; })()}
     <div class="card">
       <div class="money-row"><span>Speso in acquisti</span><b class="num">${euro(tot.spesoAcquisti)}</b></div>
       <div class="money-row"><span>Incassato dalle clienti</span><b class="num">${euro(tot.incassato)}</b></div>
@@ -2330,7 +2339,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v44</p>`;
+    <p class="versione" style="text-align:center">v45</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
