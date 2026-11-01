@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=36";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=36";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=38";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=38";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=36";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=38";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -381,11 +381,11 @@ async function eliminaAcquisti(ids) {
   const set = new Set(ids);
   const collegate = vendite.filter(v => (v.righe || []).some(r => r.fonte && set.has(r.fonte.acquistoId)));
   if (!confirm(`Eliminare ${plurale(ids.length, "ordine a Yves Rocher", "ordini a Yves Rocher")}?` +
-    (collegate.length ? `\n\nAlcuni prodotti erano già assegnati a ${plurale(collegate.length, "vendita", "vendite")}: torneranno tra le cose “da ordinare”.` : "") +
+    (collegate.length ? `\n\nCancello anche quei prodotti dagli ordini di ${[...new Set(collegate.map(nomeVendita))].join(", ")}.` : "") +
     `\n\nPotrai annullare subito dopo.`)) return;
   const mod = acquisti.filter(a => set.has(a.id)).map(a => ({ ref: refAcquisto(a.id), prima: senzaId(a), dopo: null }));
-  for (const v of collegate) mod.push({ ref: refVendita(v.id), prima: senzaId(v),
-    dopo: { ...senzaId(v), righe: v.righe.map(r => { if (r.fonte && set.has(r.fonte.acquistoId)) { const { fonte, ...x } = r; return x; } return r; }) } });
+  for (const v of collegate) { const righe = v.righe.filter(r => !(r.fonte && set.has(r.fonte.acquistoId)));   // spariscono, non tornano "da ordinare"
+    mod.push({ ref: refVendita(v.id), prima: senzaId(v), dopo: righe.length ? { ...senzaId(v), righe } : null }); }
   selezione = null;
   await scriviMolte(mod, `${plurale(ids.length, "ordine eliminato", "ordini eliminati")}`);
 }
@@ -584,7 +584,7 @@ function htmlListaAcquisti() {
       ${tot ? `<span class="badge ${usati >= tot ? "c-green" : "c-gold"}">${usati >= tot ? "✓ Tutto assegnato" : a.arrivato === false ? `${tot - usati} di ${tot} da assegnare` : `${tot - usati} di ${tot} in magazzino`}</span>` : ""}
       ${(a.omaggiRicevuti || []).length ? `<span class="badge c-gold">Omaggi ${somma(a.omaggiRicevuti, x => x.qta)}</span>` : ""}
       ${(a.prodotti || []).some(p => p.codice) ? `<span class="badge c-blue">codici</span>` : ""}
-      ${a.arrivato === false && !inSelezione("acquisti") ? `<button class="rapido c-green" data-rapido="arrivato:${a.id}">✓ È arrivato</button>` : ""}
+      ${a.arrivato === false && !inSelezione("acquisti") ? `<button class="rapido c-green" data-rapido="arrivato:${a.id}">Segna come arrivato</button>` : ""}
     </div>`;
   }
   return h + barraSelezione("acquisti");
@@ -1113,7 +1113,7 @@ function apriAcquisto(a, opz = {}) {
     $$("[data-scod]").forEach(i => i.addEventListener("input", () => { compsDi(i.dataset.scod).forEach(p => { p.daSet.codice = normCodice(i.value); }); segna(); }));
     $$("[data-xset]").forEach(b => b.addEventListener("click", () => {
       const comps = compsDi(b.dataset.xset), per = comps.flatMap(p => assegnatiA(p.id));
-      if (per.length && !confirm(`Alcuni prodotti del set sono già di ${[...new Set(per.map(x => nomeVendita(x.v)))].join(", ")}: torneranno tra le cose da ordinare. Continuo?`)) return;
+      if (per.length && !confirm(`Alcuni prodotti del set sono già di ${[...new Set(per.map(x => nomeVendita(x.v)))].join(", ")}: li cancello anche dai loro ordini. Continuo?`)) return;
       for (const p of comps) {
         acq.prodotti.splice(acq.prodotti.indexOf(p), 1);
         for (let k = collegamenti.length - 1; k >= 0; k--) if (collegamenti[k].prodottoId === p.id) collegamenti.splice(k, 1);
@@ -1137,8 +1137,8 @@ function apriAcquisto(a, opz = {}) {
     }));
     $$("[data-xp]").forEach(b => b.addEventListener("click", () => {
       const p = acq.prodotti[+b.dataset.xp], per = assegnatiA(p.id), dentro = contenutoDi(p.id);
-      if (per.length && !confirm(`Questo prodotto è di ${per.map(x => nomeVendita(x.v)).join(", ")}. Se lo togli, torna tra le cose da ordinare. Continuo?`)) return;
-      if (dentro.length && !confirm(`L'avevi aperto: tolgo anche ${dentro.map(x => x.nome).join(", ")}. Quelli già venduti tornano tra le cose da ordinare. Continuo?`)) return;
+      if (per.length && !confirm(`Questo prodotto è di ${per.map(x => nomeVendita(x.v)).join(", ")}. Se lo togli, lo cancello anche dal suo ordine. Continuo?`)) return;
+      if (dentro.length && !confirm(`L'avevi aperto: tolgo anche ${dentro.map(x => x.nome).join(", ")}${dentro.some(x => assegnatiA(x.id).length) ? ", anche dagli ordini delle clienti a cui li avevi venduti" : ""}. Continuo?`)) return;
       for (const x of dentro) { acq.prodotti.splice(acq.prodotti.indexOf(x), 1); if (a?.prodotti?.some(y => y.id === x.id)) scollegati.add(x.id); }
       acq.prodotti.splice(acq.prodotti.indexOf(p), 1);
       for (let i = collegamenti.length - 1; i >= 0; i--) if (collegamenti[i].prodottoId === p.id) collegamenti.splice(i, 1);
@@ -1211,12 +1211,12 @@ function apriAcquisto(a, opz = {}) {
         const link = collegamenti.find(c => c.venditaId === v.id && c.rigaId === r.id);
         if (link) { cambiata = true; const p = costi.get(link.prodottoId);
           return { ...r, fonte: { acquistoId: idAcq, prodottoId: link.prodottoId }, ...(isMia(v) && p ? { prezzo: numIt(p.costo) } : {}) }; }
-        if (r.fonte?.acquistoId === idAcq && !costi.has(r.fonte.prodottoId)) { cambiata = true; const { fonte, ...resto } = r; return resto; }
+        if (r.fonte?.acquistoId === idAcq && !costi.has(r.fonte.prodottoId)) { cambiata = true; return null; }   // prodotto tolto: sparisce anche dall'ordine della cliente
         return r;
-      });
-      if (cambiata) toccate.set(v.id, { prima: v, dopo: { ...v, righe } });
+      }).filter(Boolean);
+      if (cambiata) toccate.set(v.id, { prima: v, dopo: righe.length ? { ...v, righe } : null });
     }
-    return [...toccate.values()].map(t => ({ ref: refVendita(t.prima.id), prima: senzaId(t.prima), dopo: senzaId(t.dopo) }));
+    return [...toccate.values()].map(t => ({ ref: refVendita(t.prima.id), prima: senzaId(t.prima), dopo: t.dopo ? senzaId(t.dopo) : null }));
   }
 
   async function salva() {
@@ -1242,9 +1242,11 @@ function apriAcquisto(a, opz = {}) {
       const nomeMese = new Date(mese + "-01T00:00").toLocaleDateString("it-IT", { month: "long" });
       if (dopo >= soglia && prima < soglia && !confirm(`Attenzione: con quest'ordine a ${nomeMese} arrivi a ${euro(dopo)} di acquisti, sopra la soglia di ${euro(soglia)}: sulla parte in più paghi anche la tassa.\n\nSalvo lo stesso?`)) return;
     }
-    const mod = [{ ref: refAcquisto(nuovoIdAcq), prima: a ? senzaId(a) : null, dopo: dati }, ...modificheVendite(nuovoIdAcq, prodotti), ...venditeDaAssegnare(dati)];
+    const mv = modificheVendite(nuovoIdAcq, prodotti);
+    const tolteDaClienti = mv.filter(m => !m.dopo || m.dopo.righe.length < m.prima.righe.length).length;
+    const mod = [{ ref: refAcquisto(nuovoIdAcq), prima: a ? senzaId(a) : null, dopo: dati }, ...mv, ...venditeDaAssegnare(dati)];
     $("#a-salva").disabled = true;
-    await scriviConAnnulla(mod, null);
+    await scriviConAnnulla(mod, tolteDaClienti ? `Salvato · tolto anche da ${plurale(tolteDaClienti, "ordine di una cliente", "ordini di clienti")}` : null);
     // ricordo costo e codici per la prossima volta
     for (const { info: d, comps } of setsIn()) setDoc(doc(col("catalogo"), slug("set " + d.nome)), { nome: d.nome, tipo: "set",
       codiceSet: normCodice(d.codice) || null, costoSet: numIt(d.costoSet) || null, componenti: comps.map(({ p }) => ({ nome: p.nome, valore: Number(p.valoreSet) || 0, pezzi: pezziDi(p) })) }, { merge: true });
@@ -1263,7 +1265,7 @@ function apriAcquisto(a, opz = {}) {
     }
     chiudiSheet(true);
     const nAss = [...perChi.values()].length;
-    if (nAss) avviso(`✓ Salvato · ${plurale(nAss, "prodotto assegnato", "prodotti assegnati")}`); else
+    if (tolteDaClienti) {} else if (nAss) avviso(`✓ Salvato · ${plurale(nAss, "prodotto assegnato", "prodotti assegnati")}`); else
     avviso(a ? "✓ Ordine aggiornato" : collegamenti.length ? `✓ Salvato: ${plurale(collegamenti.length, "richiesta collegata", "richieste collegate")}` : "✓ Ordine salvato");
   }
 
@@ -1286,7 +1288,7 @@ function apriAcquisto(a, opz = {}) {
 
   async function elimina() {
     const usati = acq.prodotti.filter(p => assegnatiA(p.id).length).length;
-    if (!confirm(usati ? `Eliminare l'ordine? ${plurale(usati, "prodotto è già assegnato", "prodotti sono già assegnati")} a delle clienti: torneranno “da ordinare”.` : "Eliminare questo ordine?")) return;
+    if (!confirm(usati ? `Eliminare l'ordine? ${plurale(usati, "prodotto è già assegnato", "prodotti sono già assegnati")} a delle clienti: li cancello anche dai loro ordini.` : "Eliminare questo ordine?")) return;
     const mod = [{ ref: refAcquisto(a.id), prima: senzaId(a), dopo: null }, ...modificheVendite(a.id, [])];
     await scriviConAnnulla(mod, "Ordine eliminato");
     chiudiSheet(true);
@@ -1325,8 +1327,8 @@ function renderVendite() {
       ${isMia(v) ? `<span class="badge c-pink">Per me</span>` : v.pagato ? `<span class="badge c-green">✓ Pagato</span>` : `<span class="badge c-pink">Da pagare</span>`}
       ${dc ? `<span class="badge c-orange">${dc} da consegnare</span>` : `<span class="badge c-green">✓ Consegnato</span>`}
       ${c.nDaOrdinare ? `<span class="badge c-blue">${c.nDaOrdinare} da ordinare</span>` : ""}
-      ${inSelezione("vendite") ? "" : `<div class="rapidi">${!isMia(v) && !v.pagato ? `<button class="rapido c-green" data-rapido="pagato:${v.id}">✓ Pagato</button>` : ""}
-        ${(v.righe || []).some(consegnabile) ? `<button class="rapido c-orange" data-rapido="consegnato:${v.id}">✓ Consegnato</button>` : ""}</div>`}
+      ${inSelezione("vendite") ? "" : `<div class="rapidi">${!isMia(v) && !v.pagato ? `<button class="rapido c-green" data-rapido="pagato:${v.id}">Segna pagato</button>` : ""}
+        ${(v.righe || []).some(consegnabile) ? `<button class="rapido c-orange" data-rapido="consegnato:${v.id}">Segna consegnato</button>` : ""}</div>`}
     </div>`;
   }
   $("#view").innerHTML = h + barraSelezione("vendite");
@@ -2213,7 +2215,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v36</p>`;
+    <p class="versione" style="text-align:center">v38</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
