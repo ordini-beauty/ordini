@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=41";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=41";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=42";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=42";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=41";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=42";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -1200,7 +1200,15 @@ function apriAcquisto(a, opz = {}) {
     const riempiDaCatalogo = () => {
       const daCod = voceDaCodice(nomeIn.value);          // scritto un codice al posto del nome
       if (daCod?.tipo === "set") { nuovoSet = setDaCatalogo(daCod.voce, parseInt($("#np-qta").value) || 1); nomeIn.value = ""; $(".set-form")?.remove(); disegna(); avviso("Set trovato: controlla e tocca “Aggiungi il set”"); return; }
-      if (!daCod && voceSet(nomeIn.value)) { nuovoSet = setDaCatalogo(voceSet(nomeIn.value), parseInt($("#np-qta").value) || 1); nomeIn.value = ""; $(".set-form")?.remove(); disegna(); return; }
+      // il nome è anche quello di un set/calendario già visto: non cambio niente da sola (prima cancellava quello che stavi scrivendo), propongo soltanto
+      $("#np-come-set")?.remove();
+      if (!daCod && voceSet(nomeIn.value)?.componenti?.length) {
+        const v = voceSet(nomeIn.value), link = document.createElement("button");
+        link.id = "np-come-set"; link.className = "link link-piccolo";
+        link.textContent = `Vuoi inserirlo con il suo contenuto (${v.componenti.length} prodotti)?`;
+        link.addEventListener("click", () => { nuovoSet = setDaCatalogo(v, parseInt($("#np-qta").value) || 1); nomeIn.value = ""; $(".set-form")?.remove(); disegna(); });
+        nomeIn.after(link);
+      }
       if (daCod) { nomeIn.value = daCod.voce.nome; tipoNuovo = daCod.tipo; $$("[data-ntipo-acq]").forEach(x => x.classList.toggle("on", x.dataset.ntipoAcq === tipoNuovo)); }
       const c = modoTotale ? (voceCatalogo(nomeIn.value)?.prezzo ?? "") : costoDi(nomeIn.value, tipoNuovo);
       if (c !== "" && !costoIn.value) costoIn.value = inIt(c);
@@ -2272,7 +2280,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v41</p>`;
+    <p class="versione" style="text-align:center">v42</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
