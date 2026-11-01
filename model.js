@@ -14,7 +14,7 @@
 //               costo?: numero                       // costo a pezzo noto senza fonte (solo dati convertiti)
 //            }] }
 //   Riga senza fonte e senza costo = "da ordinare" (richiesta della cliente non ancora acquistata).
-import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=38";
+import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=39";
 
 export { IO, STORICO, chiave };
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -156,7 +156,7 @@ export function magazzino(acquisti, vendite, opz = {}) {
     const k = `${a.id}:${p.id}`, x = indice.get(k);
     const u = uso.get(k) || { qta: 0, valore: 0 }, e = extra.get(k) || { qta: 0, valore: 0 };
     const conf = !!p.confezione;
-    const disp = conf ? x.valoreConf - u.valore - e.valore : qtaDi(p) - (Number(p.aperti) || 0) - u.qta - e.qta;
+    const disp = conf ? x.valoreConf - u.valore - e.valore : qtaDi(p) - (Number(p.aperti) || 0) - (Number(p.tolti) || 0) - u.qta - e.qta;
     const g = chiave(p.nome) + (conf ? "#conf" : "");
     if (!gruppi.has(g)) gruppi.set(g, { nome: p.nome, confezione: conf, disponibili: 0, costoTot: 0, fonti: [], inArrivo: 0 });
     const G = gruppi.get(g);
@@ -174,6 +174,11 @@ export function magazzino(acquisti, vendite, opz = {}) {
 }
 // merce ordinata, non ancora arrivata e non ancora assegnata
 export const valoreInArrivo = (acquisti, vendite) => r2(magazzino(acquisti, vendite, { ancheInArrivo: true }).reduce((s, g) => s + (g.inArrivo ? g.costoTot * Math.min(1, g.inArrivo / g.disponibili) : 0), 0));
+// pezzi tolti dal magazzino perché rotti, persi o regalati: soldi spesi che non tornano
+export function valoreTolti(acquisti) {
+  const indice = indiceProdotti(acquisti);
+  return r2(acquisti.reduce((s, a) => s + (a.prodotti || []).reduce((t, p) => t + (Number(p.tolti) || 0) * (indice.get(`${a.id}:${p.id}`)?.costoPezzo || 0), 0), 0));
+}
 export const valoreMagazzino = (acquisti, vendite) => r2(magazzino(acquisti, vendite).reduce((s, g) => s + g.costoTot, 0));
 
 // ---------- Riepiloghi ----------
