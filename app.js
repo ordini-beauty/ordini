@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=35";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=35";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=36";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=36";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=35";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=36";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -105,9 +105,13 @@ onAuthStateChanged(auth, (user) => {
   if (!user) { uid = null; $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); return; }
   uid = user.uid;
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
-  const ascolta = (nome, cb) => unsub.push(onSnapshot(col(nome), s => { cb(s.docs.map(d => ({ id: d.id, ...d.data() }))); caricati.add(nome); render(); }));
+  // se Firebase rifiuta la lettura lo dico, invece di mostrare l'app vuota come se i dati non ci fossero
+  const erroreLettura = (nome) => (err) => { console.error(nome, err); avviso(`Non riesco a leggere i dati (${nome}): ${err?.code === "permission-denied" ? "accesso negato, esci e rientra" : (err?.message || err)}. I dati non sono cancellati.`); };
+  const ascolta = (nome, cb) => unsub.push(onSnapshot(col(nome), s => {
+    try { cb(s.docs.map(d => ({ id: d.id, ...d.data() }))); } catch (e) { console.error(nome, e); }
+    caricati.add(nome); render(); }, erroreLettura(nome)));
   const perData = (a, b) => String(b.data || "").localeCompare(String(a.data || ""));
-  ascolta("clienti", d => clienti = d.sort((a, b) => a.nome.localeCompare(b.nome, "it")));
+  ascolta("clienti", d => clienti = d.sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "it")));
   ascolta("acquisti", d => acquisti = d.sort(perData));
   ascolta("vendite", d => vendite = d.sort(perData));
   ascolta("ordini", d => ordiniVecchi = d);
@@ -2209,7 +2213,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v35</p>`;
+    <p class="versione" style="text-align:center">v36</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
