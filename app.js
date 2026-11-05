@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=45";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=45";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=46";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=46";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=45";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=46";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -770,6 +770,21 @@ function htmlMagazzino() {
       <div class="actions"><button class="c-gold" data-om-vendi="${esc(v.nome)}">Vendi</button></div></div>`).join("") : "";
   if (!g.length && !om.length) h += `<div class="empty"><div class="e-ico"></div><b>Magazzino vuoto</b><br>Qui finiscono i prodotti arrivati e non ancora dati a nessuno.</div>`;
   return h + htmlOm + htmlAperti;
+}
+
+// Quanto guadagneresti vendendo tutta la merce in magazzino al prezzo di vendita che hai segnato
+function margineMagazzino() {
+  let margine = 0, pezzi = 0, senzaPrezzo = 0;
+  for (const g of magazzino(acquisti, vendite)) {
+    if (g.confezione) { margine += g.disponibili - g.costoTot; pezzi++; continue; }   // vecchi calendari: resta il valore di vendita
+    for (const f of g.fonti) {
+      const p = acquistoDi(f.acquistoId)?.prodotti.find(x => x.id === f.prodottoId);
+      const prezzo = numIt(p?.prezzo) || Number(p?.valoreSet) || numIt(voceCatalogo(g.nome)?.prezzo);
+      if (!prezzo) { senzaPrezzo += Math.round(f.disponibili); continue; }
+      margine += (prezzo - f.costoPezzo) * f.disponibili; pezzi += f.disponibili;
+    }
+  }
+  return { margine: Math.round(margine * 100) / 100, pezzi, senzaPrezzo, persi: valoreTolti(acquisti) };
 }
 
 // ---------- Togliere un pezzo dal magazzino ----------
@@ -2296,6 +2311,17 @@ function renderSoldi() {
           ${merce ? `<div><span>In casa hai ancora merce pagata</span><b class="num">${euro(merce)}</b></div>` : ""}
           ${tot.spesoPerMe ? `<div><span>Prodotti presi per te</span><b class="num">${euro(tot.spesoPerMe)}</b></div>` : ""}
         </div></div>`; })()}
+    ${(() => { const idx = indiceProdotti(acquisti), gNonPagato = Math.round(somma(vendite.filter(v => !isMia(v) && !v.pagato), v => calcolaVendita(v, idx).guadagno) * 100) / 100;
+      const mm = margineMagazzino(), ipotesi = Math.round((tot.guadagno + mm.margine) * 100) / 100;
+      return `<div class="big-money ${tot.guadagno >= 0 ? "c-green" : "c-pink"}" style="padding:18px"><div>Guadagno da sempre</div>
+        <div class="v num" style="font-size:40px">${tot.guadagno > 0 ? "+" : ""}${euro(tot.guadagno)}</div>
+        <div style="font-size:14px;color:var(--muted)">sui prodotti già venduti: prezzo di vendita meno quanto li hai pagati</div>
+        <div class="bil-righe">
+          ${gNonPagato ? `<div><span>di cui ancora da incassare</span><b class="num">${euro(gNonPagato)}</b></div>` : ""}
+          ${mm.pezzi ? `<div><span>Se vendi tutta la merce in magazzino ai tuoi prezzi (+${euro(mm.margine)})</span><b class="num" style="color:var(--green)">${ipotesi > 0 ? "+" : ""}${euro(ipotesi)}</b></div>` : ""}
+          ${mm.senzaPrezzo ? `<div><span>${plurale(mm.senzaPrezzo, "prodotto in magazzino non ha", "prodotti in magazzino non hanno")} il prezzo di vendita: non conteggiati</span><b></b></div>` : ""}
+          ${mm.persi ? `<div><span>Prodotti rotti, persi o regalati (già pagati)</span><b class="num" style="color:var(--red)">−${euro(mm.persi)}</b></div>` : ""}
+        </div></div>`; })()}
     <div class="card">
       <div class="money-row"><span>Speso in acquisti</span><b class="num">${euro(tot.spesoAcquisti)}</b></div>
       <div class="money-row"><span>Incassato dalle clienti</span><b class="num">${euro(tot.incassato)}</b></div>
@@ -2339,7 +2365,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v45</p>`;
+    <p class="versione" style="text-align:center">v46</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
