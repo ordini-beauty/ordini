@@ -14,7 +14,7 @@
 //               costo?: numero                       // costo a pezzo noto senza fonte (solo dati convertiti)
 //            }] }
 //   Riga senza fonte e senza costo = "da ordinare" (richiesta della cliente non ancora acquistata).
-import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=49";
+import { IO, SCORTA, STORICO, chiave, calcolaOrdine } from "./calc.js?v=50";
 
 export { IO, STORICO, chiave };
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -27,11 +27,21 @@ const chiaveFonte = (f) => f ? `${f.acquistoId}:${f.prodottoId}` : null;
 // Il prodotto grande tiene "aperti: n"; ciò che c'era dentro ha "apertoDa: id del prodotto grande" e si prende
 // una parte del suo costo, in proporzione al prezzo di vendita. Non entra nella divisione del totale dell'ordine.
 const dalContenuto = (p) => !!p.apertoDa;
-const fuoriConto = (p) => p.regalo || dalContenuto(p);
-// ordine segnato col solo totale: quello della fattura, o una stima finché la fattura non arriva
-const totaleFattura = (a) => Number(a.totalePagato) || Number(a.totaleStimato) || 0;
+// "costoFisso": prodotto rimesso in magazzino da un ordine di una cliente (era tuo): il suo costo era già nelle spese,
+// quindi non entra nel totale dell'ordine né nella divisione, ma porta con sé il suo costo a pezzo.
+const conCostoFisso = (p) => p.costoFisso !== undefined && p.costoFisso !== null;
+const fuoriConto = (p) => p.regalo || dalContenuto(p) || conCostoFisso(p);
+// Stima della fattura finché non arriva: valore di vendita dei prodotti × (1 − sconto dell'ordine)
+export const SCONTO_STIMA = 25;
+export const scontoDi = (a) => a.scontoStima === undefined || a.scontoStima === null ? SCONTO_STIMA : Number(a.scontoStima) || 0;
+export const valoreOrdine = (prodotti) => r2((prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : valoreVendita(p) * qtaDi(p)), 0));
+export const stimaDaSconto = (prodotti, sconto) => r2(valoreOrdine(prodotti) * (1 - (Number(sconto) || 0) / 100));
+const pagatoFattura = (a) => Number(a.totalePagato) > 0;
+// ordine segnato col solo totale: quello della fattura, o la stima (sconto dell'ordine) finché la fattura non arriva
+const totaleFattura = (a) => pagatoFattura(a) ? Number(a.totalePagato)
+  : a.attesaFattura ? stimaDaSconto(a.prodotti, scontoDi(a)) : Number(a.totaleStimato) || 0;
 export const aTotale = (a) => totaleFattura(a) > 0;
-export const fatturaInAttesa = (a) => !(Number(a.totalePagato) > 0) && Number(a.totaleStimato) > 0;
+export const fatturaInAttesa = (a) => !pagatoFattura(a) && aTotale(a);
 export function totaleAcquisto(a) {
   if (aTotale(a)) return r2(totaleFattura(a));
   return r2((a.prodotti || []).reduce((s, p) => s + (fuoriConto(p) ? 0 : Number(p.costo) || 0) * qtaDi(p), 0) + (Number(a.spedizione) || 0));
@@ -56,6 +66,7 @@ export function indiceProdotti(acquisti) {
     const sped = Number(a.spedizione) || 0;
     for (const p of a.prodotti || []) {
       if (dalContenuto(p)) continue;
+      if (conCostoFisso(p)) { m.set(`${a.id}:${p.id}`, { acquisto: a, prodotto: p, costoPezzo: Number(p.costoFisso) || 0, valoreConf: 0 }); continue; }
       const costo = p.regalo ? 0 : Number(p.costo) || 0;
       const costoPezzo = p.regalo ? 0 : daTot ? daTot.get(p.id) : costo + (base > 0 ? sped * costo / base : 0);
       m.set(`${a.id}:${p.id}`, { acquisto: a, prodotto: p, costoPezzo,

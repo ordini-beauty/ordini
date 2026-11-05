@@ -448,3 +448,13 @@ button.rapido::before { content: "→"; opacity: .8; }
 .sit-tot b { font: 600 22px var(--serif); }
 .sit-fin { border-top: 2px solid var(--text); margin-top: 6px; padding-top: 12px; }
 .sit-fin b { font: 600 30px var(--serif); }
+.sconto-riga { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--muted); flex-wrap: wrap; }
+.sconto-riga input { width: 70px; text-align: center; }
+.stima-eti { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--gold); border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); border-radius: 6px; padding: 2px 6px; vertical-align: middle; }
+.sit-riga small { font-size: 12px; color: var(--muted); font-weight: 400; }
+.sit-riga b { text-align: right; }
+.debiti { margin: 0 0 6px; border-left: 2px solid var(--line); padding-left: 10px; }
+.debito { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 6px 0; font-size: 14px; }
+.debito div { display: flex; flex-direction: column; min-width: 0; }
+.debito small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debito .rapido, .card .debito button.rapido { margin-top: 0; padding: 6px 10px; font-size: 12.5px; }

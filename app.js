@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=49";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=49";
-import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=49";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=50";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=50";
+import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaDaSconto, scontoDi, valoreOrdine, fatturaInAttesa,
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=50";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -579,7 +579,7 @@ function htmlListaAcquisti() {
     const { tot, usati } = assegnatiAcquisto(a);
     h += `<div class="card b-orange tap ${inSelezione("acquisti") && selezione.ids.has(a.id) ? "scelta" : ""}" data-acq="${a.id}">
       <div class="row"><h3>${casella("acquisti", a.id)}${dataLunga(a.data)}${a.numeroOrdine ? ` <span class="muted" style="font-weight:500;font-size:15px">· n° ${esc(a.numeroOrdine)}</span>` : ""}</h3>
-        <span class="amount num">${euro(totaleAcquisto(a))}</span></div>
+        <span class="amount num">${fatturaInAttesa(a) ? `<span class="stima-eti">stima</span> ` : ""}${euro(totaleAcquisto(a))}</span></div>
       <div class="sub">${esc((a.prodotti || []).map(p => `${qtaDi(p) > 1 ? qtaDi(p) + "× " : ""}${p.nome}`).join(", ")) || "Nessun prodotto"}</div>
       ${fatturaInAttesa(a) ? `<span class="badge c-gold">Fattura da segnare</span>` : ""}
       ${a.arrivato === false ? `<span class="badge c-blue">${giorniDa(a.data) > 0 ? `In arrivo da ${plurale(giorniDa(a.data), "giorno", "giorni")}` : "In arrivo · ordinato oggi"}</span>` : `<span class="badge c-green">✓ Arrivato</span>`}
@@ -805,7 +805,7 @@ function togliUno(g) {
   const f = [...g.fonti].reverse().find(x => x.disponibili >= 1 && x.arrivato);   // il più recente
   if (!f) return avviso("Non c'è niente da togliere");
   const a = acquistoDi(f.acquistoId), p = a.prodotti.find(x => x.id === f.prodottoId);
-  const ilTotaleCambia = !(Number(a.totalePagato) || Number(a.totaleStimato));
+  const ilTotaleCambia = !(Number(a.totalePagato) || Number(a.totaleStimato) || a.attesaFattura);
   sheetChiudi = null;
   $("#sheet-body").innerHTML = testataSheet("Togli dal magazzino", false) + `
     <div class="sh-main"><div class="question">Togli 1 × ${esc(g.nome)}</div>
@@ -913,16 +913,17 @@ function apriAcquisto(a, opz = {}) {
     p.tipoAcquisto ||= "singolo"; if (p.codice === undefined) p.codice = codiceDi(p.nome, p.tipoAcquisto); p._cod = { [p.tipoAcquisto]: p.codice }; });
   let nuovoSet = null;                  // modulo "Aggiungi un set" aperto
   // "Solo il totale": si scrive quanto si è pagato in tutto e a quanto si vende ogni prodotto; i costi li divido io
-  let modoTotale = a ? numIt(a.totalePagato) > 0 || numIt(a.totaleStimato) > 0 : true;
+  let modoTotale = a ? numIt(a.totalePagato) > 0 || numIt(a.totaleStimato) > 0 || !!a.attesaFattura : true;
   acq.totalePagato = a && numIt(a.totalePagato) ? a.totalePagato : "";
+  acq.scontoStima = scontoDi(acq);       // sconto usato per stimare la fattura finché non arriva (di solito 20–30%)
   const prezzoCollegato = (pid) => { if (!a) return null; for (const v of vendite) for (const r of v.righe || [])
     if (r.fonte?.acquistoId === a.id && r.fonte.prodottoId === pid && !isMia(v) && numIt(r.prezzo)) return numIt(r.prezzo); return null; };
   acq.prodotti.forEach(p => { if (!p.daSet && !p.apertoDa && (p.prezzo === undefined || p.prezzo === null))
     p.prezzo = prezzoCollegato(p.id) ?? voceCatalogo(p.nome)?.prezzo ?? ""; });
   const perChi = new Map();             // prodotto → cliente (o "Per me") a cui va il resto non ancora assegnato
-  const pseudoProdotti = () => acq.prodotti.map(p => ({ id: p.id, qta: qtaDi(p), prezzo: numIt(p.prezzo), valoreSet: Number(p.valoreSet) || 0, confezione: p.confezione, regalo: !!p.regalo, apertoDa: p.apertoDa }));
+  const pseudoProdotti = () => acq.prodotti.map(p => ({ id: p.id, qta: qtaDi(p), prezzo: numIt(p.prezzo), valoreSet: Number(p.valoreSet) || 0, confezione: p.confezione, regalo: !!p.regalo, apertoDa: p.apertoDa, costoFisso: p.costoFisso }));
   const contenutoDi = (pid) => acq.prodotti.filter(x => x.apertoDa === pid);
-  const stimaFattura = () => stimaTotale(acquisti, pseudoProdotti(), a?.id);
+  const stimaFattura = () => ({ totale: stimaDaSconto(pseudoProdotti(), numIt(acq.scontoStima)), valore: valoreOrdine(pseudoProdotti()) });
   const totaleUsato = () => numIt(acq.totalePagato) || stimaFattura().totale;   // senza fattura uso la stima
   const stime = () => costiDaTotale({ totalePagato: totaleUsato(), prodotti: pseudoProdotti() });
   let regaloNuovo = false;              // il prossimo prodotto aggiunto è un regalo di Yves Rocher
@@ -1051,7 +1052,9 @@ function apriAcquisto(a, opz = {}) {
         <div class="yesno"><div class="yn-q">Quanto hai pagato?</div>
           <div class="mini-seg seg-modo"><button data-modo="tot" class="${modoTotale ? "on" : ""}">Solo il totale</button><button data-modo="pezzo" class="${modoTotale ? "" : "on"}">Prodotto per prodotto</button></div>
           ${modoTotale ? `<label style="margin-top:0">Totale della fattura (spedizione compresa)</label><input id="a-totpag" class="totale-in" inputmode="decimal" value="${esc(inIt(acq.totalePagato))}" placeholder="Fattura non ancora arrivata">
-            <div class="hint">Per ogni prodotto scrivi il prezzo di vendita, come nell'ordine. Se la fattura non è ancora arrivata lascia vuoto: uso una stima e te lo ricordo; quando arriva, scrivi il totale e i conti si sistemano.</div>`
+            <div class="sconto-riga ${numIt(acq.totalePagato) ? "hidden" : ""}"><span>Fattura non ancora arrivata: la stimo con lo sconto del</span>
+              <input id="a-sconto" inputmode="decimal" value="${esc(inIt(acq.scontoStima))}" aria-label="Sconto stimato"><span>%</span></div>
+            <div class="hint">Per ogni prodotto scrivi il prezzo di vendita, come nell'ordine. Quando arriva la fattura, scrivi il totale vero qui sopra: la stima viene sostituita e i conti si sistemano.</div>`
           : `<div class="hint">Scrivi il costo di ogni prodotto: il totale lo calcolo io.</div>`}</div>
 
         ${richieste.length ? `<div class="yesno richieste"><div class="yn-q">Richieste delle clienti da ordinare</div>
@@ -1075,7 +1078,8 @@ function apriAcquisto(a, opz = {}) {
               ? `<div><label>Lo vendi a (uno)</label><input class="costo-in" data-pp="${i}" inputmode="decimal" value="${esc(inIt(p.prezzo))}" placeholder="€"></div>`
               : `<div><label>Costo ${p.confezione ? "confezione" : "a pezzo"}</label><input class="costo-in" data-pc="${i}" inputmode="decimal" value="${esc(inIt(p.costo))}" placeholder="€"></div>`}
           </div>
-          ${p.regalo ? `<span class="stima">Regalo di Yves Rocher: non ti costa nulla, quello che incassi è tutto guadagno.</span>` : htmlStima(p)}
+          ${p.regalo ? `<span class="stima">Regalo di Yves Rocher: non ti costa nulla, quello che incassi è tutto guadagno.</span>`
+            : p.costoFisso !== undefined && p.costoFisso !== null ? `<span class="stima">Rimesso in magazzino da un ordine di una cliente: ti è costato ${euro(p.costoFisso)} l'uno (già nelle spese).</span>` : htmlStima(p)}
           <button class="link link-piccolo" data-preg="${i}">${p.regalo ? "Non è un regalo" : "È un regalo di Yves Rocher"}</button>
           ${p.confezione ? `<label>Valore a catalogo dei prodotti dentro (una confezione)</label><input data-pv="${i}" inputmode="decimal" value="${esc(inIt(p.confezione.valore))}" placeholder="€">` : ""}
           <div class="cod-row">
@@ -1130,10 +1134,10 @@ function apriAcquisto(a, opz = {}) {
   function aggiornaStime() {
     if (!modoTotale) return;
     const st = stime(), T = totaleUsato(), stimato = !numIt(acq.totalePagato), sf = stimaFattura();
-    const vivi = acq.prodotti.filter(p => !p.apertoDa);
+    const vivi = acq.prodotti.filter(p => !p.apertoDa && (p.costoFisso === undefined || p.costoFisso === null));
     const incasso = somma(vivi, p => valorePezzo(p) * qtaDi(p)), senzaPrezzo = vivi.filter(p => !valorePezzo(p)).length;
     for (const p of acq.prodotti) {
-      if (p.regalo || p.apertoDa) continue;
+      if (p.regalo || p.apertoDa || (p.costoFisso !== undefined && p.costoFisso !== null)) continue;
       const el = $(`[data-stima="${p.id}"]`), c = st.get(p.id) || 0;
       if (el) el.innerHTML = !T ? "Scrivi a quanto lo vendi" : !valorePezzo(p) ? "Scrivi a quanto lo vendi" :
         `${stimato ? "stima: " : ""}ti costa circa <b>${euro(c)}</b> l'uno · guadagni <b style="color:${valorePezzo(p) - c >= 0 ? "var(--green)" : "var(--red)"}">${euro(Math.round((valorePezzo(p) - c) * 100) / 100)}</b>`;
@@ -1142,7 +1146,8 @@ function apriAcquisto(a, opz = {}) {
     const tot = $("#a-tot"), sub = $("#a-tot-sub"); if (!tot) return;
     tot.textContent = euro(Math.round(incasso * 100) / 100);
     const g = Math.round((incasso - T) * 100) / 100;
-    sub.innerHTML = !T ? "Aggiungi i prodotti con il prezzo di vendita" : `${stimato ? (sf.rapporto ? `fattura stimata ${euro(T)} (in media paghi il ${Math.round(sf.rapporto * 100)}% del prezzo di vendita)` : `fattura stimata ${euro(T)} (prezzo di vendita meno lo sconto del 25%)`) : `pagato ${euro(T)}`} · guadagno previsto <b>${euro(g)}</b>${senzaPrezzo ? ` · ${plurale(senzaPrezzo, "prodotto", "prodotti")} senza prezzo` : ""}`;
+    $(".sconto-riga")?.classList.toggle("hidden", !stimato);
+    sub.innerHTML = !T ? "Aggiungi i prodotti con il prezzo di vendita" : `${stimato ? `fattura <b>stimata</b> ${euro(T)} (${euro(sf.valore)} − ${inIt(numIt(acq.scontoStima))}%)` : `pagato ${euro(T)}`} · guadagno previsto <b>${euro(g)}</b>${senzaPrezzo ? ` · ${plurale(senzaPrezzo, "prodotto", "prodotti")} senza prezzo` : ""}`;
   }
 
   function collega() {
@@ -1152,6 +1157,7 @@ function apriAcquisto(a, opz = {}) {
     $("#a-note").addEventListener("input", e => { acq.note = e.target.value; segna(); });
     $("#a-sped")?.addEventListener("input", e => { acq.spedizione = e.target.value; segna(); aggiornaTotale(); });
     $("#a-totpag")?.addEventListener("input", e => { acq.totalePagato = e.target.value; segna(); aggiornaStime(); });
+    $("#a-sconto")?.addEventListener("input", e => { acq.scontoStima = e.target.value; segna(); aggiornaStime(); });
     $$("[data-preg]").forEach(b => b.addEventListener("click", () => { const p = acq.prodotti[+b.dataset.preg];
       p.regalo = !p.regalo; if (p.regalo) { if (!numIt(p.prezzo)) p.prezzo = voceCatalogo(p.nome)?.prezzo ?? ""; p.costo = 0; } segna(); disegna(); }));
     $("#np-regalo")?.addEventListener("click", () => { const salva = { n: nomeIn.value, c: costoIn.value, q: $("#np-qta").value, k: codIn.value };
@@ -1323,13 +1329,13 @@ function apriAcquisto(a, opz = {}) {
     if (nuovoSet && $("#ns-nome")) { leggiNuovoSet(); if (nuovoSet.nome.trim() && !confirm("Hai un set non ancora aggiunto: lo lascio fuori?")) return; }
     const st = modoTotale ? stime() : null;
     const prodotti = acq.prodotti.map(p => ({ id: p.id, nome: p.nome.trim(), qta: qtaDi(p), costo: st ? Math.round((st.get(p.id) || 0) * 100) / 100 : numIt(p.costo),
-      tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice), ...(!p.daSet && numIt(p.prezzo) ? { prezzo: numIt(p.prezzo) } : {}), ...(p.regalo ? { regalo: true } : {}), ...(p.daOmaggio ? { daOmaggio: true } : {}),
+      tipoAcquisto: p.tipoAcquisto || "singolo", codice: normCodice(p.codice), ...(!p.daSet && numIt(p.prezzo) ? { prezzo: numIt(p.prezzo) } : {}), ...(p.regalo ? { regalo: true } : {}), ...(p.daOmaggio ? { daOmaggio: true } : {}), ...(p.costoFisso !== undefined && p.costoFisso !== null ? { costoFisso: Number(p.costoFisso) } : {}),
       ...(p.aperti ? { aperti: Number(p.aperti) } : {}), ...(p.tolti ? { tolti: Number(p.tolti) } : {}), ...(p.apertoDa ? { apertoDa: p.apertoDa, valoreSet: Number(p.valoreSet) || 0, pezziSet: Number(p.pezziSet) || 1 } : {}),
       ...(p.daSet ? { daSet: { id: p.daSet.id, nome: p.daSet.nome, codice: normCodice(p.daSet.codice), costoSet: numIt(p.daSet.costoSet) }, valoreSet: Number(p.valoreSet) || 0, pezziSet: pezziDi(p) } : {}),
       ...(p.confezione ? { confezione: { valore: numIt(p.confezione.valore) } } : {}) }));
     const fatturaVuota = modoTotale && !numIt(acq.totalePagato);
     const dati = { ...senzaId(acq), prodotti, spedizione: modoTotale ? 0 : numIt(acq.spedizione), totalePagato: modoTotale && !fatturaVuota ? numIt(acq.totalePagato) : null,
-      totaleStimato: fatturaVuota ? (totaleUsato() || null) : null, arrivato: acq.arrivato !== false,
+      attesaFattura: fatturaVuota, scontoStima: modoTotale ? Math.min(90, Math.max(0, numIt(acq.scontoStima))) : null, totaleStimato: null, arrivato: acq.arrivato !== false,
       arrivatoIl: acq.arrivato !== false ? (acq.arrivatoIl || oggi()) : null, aggiornato: new Date().toISOString() };
     const soglia = sogliaAcquisti(), mese = String(dati.data || "").slice(0, 7);
     if (soglia && mese) {
@@ -1466,6 +1472,7 @@ function apriVendita(v, opz = {}) {
     return m;
   };
   const disponibili = () => magazzino(acquisti, vendite, { escludiVenditaId: v?.id, usoExtra: usoCorrente(), ancheInArrivo: true });
+  const rimessi = [];                   // prodotti senza ordine d'origine rimessi in magazzino da quest'ordine
   const indice = () => indiceProdotti(acquisti);
 
   function prendiDalMagazzino(g, prezzo) {
@@ -1549,6 +1556,7 @@ function apriVendita(v, opz = {}) {
         <div class="items">${ven.righe.map((r, i) => { const daOrd = rigaDaOrdinare(r), c = costoRiga(r, idx); return `<div class="item riga-ven">
             <div class="i-name"><b>${esc(nomeArt(r))}</b><br><span class="tag-${daOrd ? "ordinare" : "scorta"}">${daOrd ? "da ordinare" : r.fonte && acquistoDi(r.fonte.acquistoId)?.prodotti.find(p => p.id === r.fonte.prodottoId)?.confezione ? "dalla confezione" : acquistoDi(r.fonte?.acquistoId)?.arrivato === false ? "in arrivo" : "dal magazzino"}</span>
               ${mia() && c !== null ? `<span class="muted" style="font-size:13px"> · costo ${euro(c)}</span>` : ""}
+              ${!daOrd && !mia() ? `<button class="link link-piccolo" data-mio="${i}">Era mio, non della cliente: rimettilo in magazzino</button>` : ""}
               ${daOrd && disp.some(g => !g.confezione && chiave(g.nome) === chiave(r.nome) && g.disponibili - g.inArrivo >= qtaDi(r)) ? `<button class="link link-piccolo" data-collega="${i}">Ce l'hai in magazzino: prendilo da lì</button>` : ""}</div>
             ${mia() ? "" : `<input class="prezzo-in" data-pr="${i}" inputmode="decimal" value="${esc(inIt(r.prezzo))}" placeholder="€" aria-label="Prezzo a pezzo">`}
             <div class="stepper mini"><button data-rq="${i}" data-d="-1">−</button><b>${qtaDi(r)}</b><button data-rq="${i}" data-d="1">＋</button></div>
@@ -1583,6 +1591,14 @@ function apriVendita(v, opz = {}) {
     $("#dividi")?.addEventListener("click", () => { if (modificato && !confirm("Le modifiche non salvate andranno perse. Continuo?")) return; sheetChiudi = null; apriDividi(v); });
     $$("[data-pr]").forEach(i => i.addEventListener("input", () => { ven.righe[+i.dataset.pr].prezzo = i.value; segna();
       const t = Math.max(0, somma(ven.righe, r => numIt(r.prezzo) * qtaDi(r)) - numIt(ven.sconto)); if ($(".total-line b")) $(".total-line b").textContent = euro(t); }));
+    // ordine misto: un prodotto era tuo (es. calendario) → esce dall'ordine della cliente e torna in magazzino, non è un credito
+    $$("[data-mio]").forEach(b => b.addEventListener("click", () => {
+      const r = ven.righe[+b.dataset.mio];
+      if (!confirm(`${r.nome}: lo tolgo dall'ordine di ${nomeVendita(ven)} e lo rimetto nel tuo magazzino. La cliente non te lo deve più. Continuo?`)) return;
+      ven.righe.splice(+b.dataset.mio, 1);
+      if (!r.fonte) { const c = costoRiga(r, idx); rimessi.push({ nome: r.nome, qta: qtaDi(r), costoPezzo: c === null ? 0 : c / qtaDi(r), prezzo: numIt(r.prezzo) }); }
+      segna(); passoCosa(); avviso(`${r.nome}: rimesso in magazzino quando salvi`);
+    }));
     // una richiesta "da ordinare" che in realtà è già in magazzino (es. dal contenuto di un calendario)
     $$("[data-collega]").forEach(b => b.addEventListener("click", () => {
       const r = ven.righe[+b.dataset.collega], g = disp.find(x => !x.confezione && chiave(x.nome) === chiave(r.nome));
@@ -1685,7 +1701,14 @@ function apriVendita(v, opz = {}) {
       dati.pagatoIl = dati.pagato ? (v?.pagato ? (v.pagatoIl || ven.data) : oggi()) : null;
       if (mia()) dati.pagatoIl = ven.data;
       $("#v-salva").disabled = true;
-      await scriviConAnnulla([{ ref: refVendita(idVen), prima: v ? senzaId(v) : null, dopo: dati }], null);
+      const mod = [{ ref: refVendita(idVen), prima: v ? senzaId(v) : null, dopo: dati.righe.length ? dati : null }];
+      if (rimessi.length) {   // vanno in un ordine arrivato (quello più vicino prima della vendita) con il loro costo: le spese non cambiano
+        const arrivati = acquisti.filter(x => x.arrivato !== false), dest = arrivati.find(x => String(x.data) <= String(dati.data)) || arrivati[0];
+        if (dest) mod.push({ ref: refAcquisto(dest.id), prima: senzaId(dest), dopo: { ...senzaId(dest), prodotti: [...(dest.prodotti || []),
+          ...rimessi.map(x => ({ id: nuovoId(), nome: x.nome, qta: x.qta, costo: Math.round(x.costoPezzo * 100) / 100, costoFisso: Math.round(x.costoPezzo * 10000) / 10000,
+            tipoAcquisto: "singolo", codice: "", ...(x.prezzo ? { prezzo: x.prezzo } : {}) }))] } });
+      }
+      await scriviConAnnulla(mod, rimessi.length ? "Salvato · rimesso in magazzino" : null);
       if (!mia()) for (const r of dati.righe) if (r.prezzo) setDoc(doc(col("catalogo"), slug(r.nome)), { nome: r.nome, prezzo: r.prezzo }, { merge: true });
       chiudiSheet(true);
       const nuoveRich = dati.righe.filter(rigaDaOrdinare).length - (v?.righe || []).filter(rigaDaOrdinare).length;
@@ -2294,17 +2317,26 @@ function renderSoldi() {
   const tile = (cls, ico, val, lbl) => `<div class="tile ${cls}"><div class="t-ico">${ico}</div><div class="t-val num">${euro(val)}</div><div class="t-lbl">${lbl}</div></div>`;
 
   const situazione = (() => {
-    const r2 = (n) => Math.round(n * 100) / 100, cassa = r2(tot.incassato - tot.spesoAcquisti), im = incassoMagazzino();
-    const conCrediti = r2(cassa + tot.daIncassare), finale = r2(conCrediti + im.valore);
+    const r2 = (n) => Math.round(n * 100) / 100, im = incassoMagazzino();
+    const cassa = r2(tot.incassato - tot.spesoAcquisti);                      // Cassa oggi = Incassato − Speso
+    const stimati = r2(somma(acquisti.filter(fatturaInAttesa), totaleAcquisto));
+    const ottimista = r2(cassa + tot.daIncassare + im.valore), prudente = r2(cassa + tot.daIncassare + merce);
     const segno = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${euro(Math.abs(n))}`, col = (n) => n >= 0 ? "var(--green)" : "var(--red)";
+    // chi deve cosa: un ordine per riga, il più vecchio in alto
+    const idx = indiceProdotti(acquisti);
+    const debiti = vendite.filter(v => !isMia(v) && !v.pagato).map(v => ({ v, c: calcolaVendita(v, idx) })).filter(x => x.c.daIncassare > 0)
+      .sort((a, b) => String(a.v.data).localeCompare(String(b.v.data)));
     return `<div class="card situazione"><div class="livello-eti">La tua situazione, da quando hai iniziato</div>
       <div class="sit-riga"><span>Incassato dalle clienti</span><b class="num">${euro(tot.incassato)}</b></div>
-      <div class="sit-riga"><span>Speso in acquisti Yves Rocher</span><b class="num">−${euro(tot.spesoAcquisti)}</b></div>
-      <div class="sit-riga sit-tot"><span>Oggi sei a</span><b class="num" style="color:${col(cassa)}">${segno(cassa)}</b></div>
+      <div class="sit-riga"><span>Speso in acquisti Yves Rocher${stimati ? `<br><small>di cui ${euro(stimati)} <span class="stima-eti">stima</span> (fatture non ancora arrivate)</small>` : ""}</span><b class="num">−${euro(tot.spesoAcquisti)}</b></div>
+      <div class="sit-riga sit-tot"><span>Cassa oggi</span><b class="num" style="color:${col(cassa)}">${segno(cassa)}</b></div>
       <div class="sit-riga"><span>+ Ti devono ancora le clienti</span><b class="num">${euro(tot.daIncassare)}</b></div>
-      <div class="sit-riga"><span>+ Merce in magazzino, venduta ai tuoi prezzi</span><b class="num">${euro(im.valore)}</b></div>
-      <div class="sit-riga sit-fin"><span>Quando vendi e incassi tutto</span><b class="num" style="color:${col(finale)}">${segno(finale)}</b></div>
-      <div class="hint">${tot.daIncassare ? `Solo con quello che ti devono arrivi a ${segno(conCrediti)}. ` : ""}${im.senzaPrezzo ? `${plurale(im.senzaPrezzo, "prodotto senza prezzo di vendita è contato", "prodotti senza prezzo di vendita sono contati")} a quanto l'hai pagato. ` : ""}Gli omaggi non sono contati.</div></div>`;
+      ${debiti.length ? `<div class="debiti">${debiti.map(({ v, c }) => `<div class="debito"><div><b>${esc(nomeVendita(v))}</b><small>${dataLunga(v.data)} · ${esc(elencoRighe(v.righe || []))}</small></div>
+          <span class="num">${euro(c.daIncassare)}</span><button class="rapido c-green" data-sit-paga="${v.id}">Pagato</button></div>`).join("")}</div>` : ""}
+      <div class="sit-riga"><span>+ Merce in magazzino</span><b class="num">${euro(im.valore)} <small>ai tuoi prezzi</small><br>${euro(merce)} <small>a costo</small></b></div>
+      <div class="sit-riga sit-fin"><span>Risultato finale previsto</span><b class="num" style="color:${col(ottimista)}">${segno(ottimista)}</b></div>
+      <div class="sit-riga"><span>Versione prudente (magazzino a costo)</span><b class="num" style="color:${col(prudente)}">${segno(prudente)}</b></div>
+      <div class="hint">Vale solo se vendi tutto il magazzino a prezzo pieno e incassi tutto. ${im.senzaPrezzo ? `${plurale(im.senzaPrezzo, "prodotto senza prezzo di vendita è contato", "prodotti senza prezzo di vendita sono contati")} a costo anche nella versione ai tuoi prezzi. ` : ""}Gli omaggi non sono contati.</div></div>`;
   })();
 
   $("#view").innerHTML = `
@@ -2384,8 +2416,9 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v49</p>`;
+    <p class="versione" style="text-align:center">v50</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
+  $$("[data-sit-paga]").forEach(b => b.addEventListener("click", () => segnaPagati([b.dataset.sitPaga])));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });
   disegnaNotifiche();
