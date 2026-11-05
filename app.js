@@ -3,10 +3,10 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, onSnapshot,
   addDoc, setDoc, deleteDoc, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=47";
-import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=47";
+import { giacenzaOmaggi, daRicontattare, linkWhatsApp, euro, chiave, IO, STORICO, completaCostiScorta } from "./calc.js?v=49";
+import { convertiFoglio, parseOmaggi, dividiProdotti, abbinaSigla } from "./importa.js?v=49";
 import { qtaDi, isMia, totaleAcquisto, indiceProdotti, costoRiga, calcolaVendita, magazzino, valoreMagazzino, valoreInArrivo, valoreTolti, costiDaTotale, stimaTotale, fatturaInAttesa,
-  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=47";
+  riepilogo, mesiPresenti, venditeComeOrdini, acquistiComeOrdini, convertiOrdini } from "./model.js?v=49";
 
 // ---------- Configurazione ----------
 // Il file viene letto come testo: funziona con o senza "export", con le righe import di Firebase e con i commenti.
@@ -785,6 +785,19 @@ function margineMagazzino() {
     }
   }
   return { margine: Math.round(margine * 100) / 100, pezzi, senzaPrezzo, persi: valoreTolti(acquisti) };
+}
+// Quanto entrerà vendendo la merce in magazzino: ai tuoi prezzi; quella senza prezzo la conto al costo (prudente)
+function incassoMagazzino() {
+  let valore = 0, senzaPrezzo = 0;
+  for (const g of magazzino(acquisti, vendite)) {
+    if (g.confezione) { valore += g.disponibili; continue; }
+    for (const f of g.fonti) {
+      const p = acquistoDi(f.acquistoId)?.prodotti.find(x => x.id === f.prodottoId);
+      const prezzo = numIt(p?.prezzo) || Number(p?.valoreSet) || numIt(voceCatalogo(g.nome)?.prezzo);
+      if (prezzo) valore += prezzo * f.disponibili; else { valore += f.costoPezzo * f.disponibili; senzaPrezzo += Math.round(f.disponibili); }
+    }
+  }
+  return { valore: Math.round(valore * 100) / 100, senzaPrezzo };
 }
 
 // ---------- Togliere un pezzo dal magazzino ----------
@@ -2280,7 +2293,22 @@ function renderSoldi() {
   const max = Math.max(1, ...mesi.map(x => Math.abs(x.guadagno)));
   const tile = (cls, ico, val, lbl) => `<div class="tile ${cls}"><div class="t-ico">${ico}</div><div class="t-val num">${euro(val)}</div><div class="t-lbl">${lbl}</div></div>`;
 
+  const situazione = (() => {
+    const r2 = (n) => Math.round(n * 100) / 100, cassa = r2(tot.incassato - tot.spesoAcquisti), im = incassoMagazzino();
+    const conCrediti = r2(cassa + tot.daIncassare), finale = r2(conCrediti + im.valore);
+    const segno = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${euro(Math.abs(n))}`, col = (n) => n >= 0 ? "var(--green)" : "var(--red)";
+    return `<div class="card situazione"><div class="livello-eti">La tua situazione, da quando hai iniziato</div>
+      <div class="sit-riga"><span>Incassato dalle clienti</span><b class="num">${euro(tot.incassato)}</b></div>
+      <div class="sit-riga"><span>Speso in acquisti Yves Rocher</span><b class="num">−${euro(tot.spesoAcquisti)}</b></div>
+      <div class="sit-riga sit-tot"><span>Oggi sei a</span><b class="num" style="color:${col(cassa)}">${segno(cassa)}</b></div>
+      <div class="sit-riga"><span>+ Ti devono ancora le clienti</span><b class="num">${euro(tot.daIncassare)}</b></div>
+      <div class="sit-riga"><span>+ Merce in magazzino, venduta ai tuoi prezzi</span><b class="num">${euro(im.valore)}</b></div>
+      <div class="sit-riga sit-fin"><span>Quando vendi e incassi tutto</span><b class="num" style="color:${col(finale)}">${segno(finale)}</b></div>
+      <div class="hint">${tot.daIncassare ? `Solo con quello che ti devono arrivi a ${segno(conCrediti)}. ` : ""}${im.senzaPrezzo ? `${plurale(im.senzaPrezzo, "prodotto senza prezzo di vendita è contato", "prodotti senza prezzo di vendita sono contati")} a quanto l'hai pagato. ` : ""}Gli omaggi non sono contati.</div></div>`;
+  })();
+
   $("#view").innerHTML = `
+    ${situazione}
     <div class="month-nav"><button id="m-prev" aria-label="Mese prima">‹</button><div class="m">${nomeMese(meseSel)}</div>
       <button id="m-next" aria-label="Mese dopo" ${meseSel >= ultimo ? "disabled style='opacity:.3'" : ""}>›</button></div>
     <div class="big-money ${m.guadagno >= 0 ? "c-green" : "c-pink"}"><div style="font-weight:700">Guadagno del mese</div>
@@ -2302,15 +2330,6 @@ function renderSoldi() {
     ${htmlClassifica(meseSel + "-15")}
 
     <div class="section"><h2>Da sempre</h2></div>
-    ${(() => { const bil = Math.round((tot.incassato - tot.spesoAcquisti) * 100) / 100, conCrediti = Math.round((bil + tot.daIncassare) * 100) / 100;
-      return `<div class="big-money ${bil >= 0 ? "c-green" : "c-pink"}" style="padding:18px"><div>Bilancio da sempre</div>
-        <div class="v num" style="font-size:40px">${bil > 0 ? "+" : ""}${euro(bil)}</div>
-        <div style="font-size:14px;color:var(--muted)">incassato dalle clienti meno speso in acquisti Yves Rocher</div>
-        <div class="bil-righe">
-          ${tot.daIncassare ? `<div><span>Quando ti pagano quello che ti devono (${euro(tot.daIncassare)})</span><b class="num">${conCrediti > 0 ? "+" : ""}${euro(conCrediti)}</b></div>` : ""}
-          ${merce ? `<div><span>In casa hai ancora merce pagata</span><b class="num">${euro(merce)}</b></div>` : ""}
-          ${tot.spesoPerMe ? `<div><span>Prodotti presi per te</span><b class="num">${euro(tot.spesoPerMe)}</b></div>` : ""}
-        </div></div>`; })()}
     ${(() => { const idx = indiceProdotti(acquisti), gNonPagato = Math.round(somma(vendite.filter(v => !isMia(v) && !v.pagato), v => calcolaVendita(v, idx).guadagno) * 100) / 100;
       const mm = margineMagazzino(), ipotesi = Math.round((tot.guadagno + mm.margine) * 100) / 100;
       return `<div class="big-money ${tot.guadagno >= 0 ? "c-green" : "c-pink"}" style="padding:18px"><div>Guadagno da sempre</div>
@@ -2365,7 +2384,7 @@ function renderSoldi() {
     </div>
     <input type="file" id="file-restore" accept=".json,application/json" class="hidden">
     <button class="ghost" id="b-logout" style="width:100%;margin-top:22px">Esci (${esc(auth.currentUser?.email)})</button>
-    <p class="versione" style="text-align:center">v47</p>`;
+    <p class="versione" style="text-align:center">v49</p>`;
   $$("[data-mese]").forEach(b => b.addEventListener("click", () => { meseSel = b.dataset.mese; renderSoldi(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   $("#m-prev").addEventListener("click", () => { meseSel = sposta(meseSel, -1); renderSoldi(); });
   $("#m-next").addEventListener("click", () => { if (meseSel < ultimo) { meseSel = sposta(meseSel, 1); renderSoldi(); } });

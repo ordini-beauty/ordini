@@ -439,3 +439,12 @@ button.rapido::before { content: "→"; opacity: .8; }
 .bil-righe { margin-top: 12px; text-align: left; }
 .bil-righe > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .bil-righe span { color: var(--muted); }
+.situazione { padding: 18px; }
+.sit-riga { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14.5px; }
+.sit-riga span { color: var(--muted); }
+.sit-riga b { font-weight: 600; }
+.sit-tot { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 10px; }
+.sit-tot span, .sit-fin span { color: var(--text); font-weight: 600; }
+.sit-tot b { font: 600 22px var(--serif); }
+.sit-fin { border-top: 2px solid var(--text); margin-top: 6px; padding-top: 12px; }
+.sit-fin b { font: 600 30px var(--serif); }
